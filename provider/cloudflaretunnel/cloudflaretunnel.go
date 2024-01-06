@@ -110,7 +110,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 	for _, rule := range result.Config.Ingress {
 		target, err := extractTarget(rule.Service)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract target: %v", err)
+			continue
 		}
 		records = append(records, endpoint.NewEndpoint(
 			rule.Hostname,
