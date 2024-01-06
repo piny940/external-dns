@@ -143,12 +143,21 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	log.Infof("Create: %v, UpdateNew: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.Delete)
 
 	for _, change := range changes.Create {
+		if change.RecordType != "A" {
+			continue
+		}
 		ingresses[change.DNSName] = newIngressRule(change)
 	}
 	for _, change := range changes.UpdateNew {
+		if change.RecordType != "A" {
+			continue
+		}
 		ingresses[change.DNSName] = newIngressRule(change)
 	}
 	for _, change := range changes.Delete {
+		if change.RecordType != "A" {
+			continue
+		}
 		delete(ingresses, change.DNSName)
 	}
 
