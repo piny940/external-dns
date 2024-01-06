@@ -147,6 +147,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 			continue
 		}
 		ingresses[change.DNSName] = newIngressRule(change)
+		log.Infof("new ingress rule: %v, dnsName: %s", newIngressRule(change), change.DNSName)
 	}
 	for _, change := range changes.UpdateNew {
 		if change.RecordType != "A" {
@@ -195,7 +196,7 @@ func newIngressRule(e *endpoint.Endpoint) cloudflare.UnvalidatedIngressRule {
 	log.Infof("target: %v", e.Targets[0])
 	return cloudflare.UnvalidatedIngressRule{
 		Hostname: e.DNSName,
-		Path:     "/",
+		Path:     "",
 		Service:  fmt.Sprintf("https://%v:443", e.Targets[0]),
 		OriginRequest: &cloudflare.OriginRequestConfig{
 			Http2Origin: boolPtr(true),
