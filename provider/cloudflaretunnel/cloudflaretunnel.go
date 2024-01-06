@@ -58,7 +58,7 @@ type CloudFlareProvider struct {
 }
 
 // NewCloudFlareProvider initializes a new CloudFlare DNS based Provider.
-func NewCloudFlareProvider(tunnelID string, domainFilter endpoint.DomainFilter, zoneIDFilter provider.ZoneIDFilter, dnsRecordsPerPage int) (*CloudFlareProvider, error) {
+func NewCloudFlareProvider(domainFilter endpoint.DomainFilter, zoneIDFilter provider.ZoneIDFilter, dnsRecordsPerPage int) (*CloudFlareProvider, error) {
 	// initialize via chosen auth method and returns new API object
 	var (
 		config *cloudflare.API
@@ -80,11 +80,20 @@ func NewCloudFlareProvider(tunnelID string, domainFilter endpoint.DomainFilter, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cloudflare provider: %v", err)
 	}
+	tunnelID := os.Getenv("CF_TUNNEL_ID")
+	if tunnelID == "" {
+		return nil, fmt.Errorf("tunnelID is empty")
+	}
+	accountID := os.Getenv("CF_ACCOUNT_ID")
+	if accountID == "" {
+		return nil, fmt.Errorf("accountID is empty")
+	}
 	provider := &CloudFlareProvider{
 		// Client: config,
-		Client:       accountService{service: config},
-		domainFilter: domainFilter,
-		tunnelID:     tunnelID,
+		Client:            accountService{service: config},
+		domainFilter:      domainFilter,
+		tunnelID:          tunnelID,
+		accountIdentifier: accountID,
 	}
 	return provider, nil
 }
