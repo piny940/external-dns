@@ -155,6 +155,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	for _, v := range ingresses {
 		newIngress = append(newIngress, v)
 	}
+	log.Infof("start to change records. before: %v, after: %v", oldConf.Config.Ingress, newIngress)
 	newConf := cloudflare.TunnelConfigurationParams{
 		TunnelID: p.tunnelID,
 		Config: cloudflare.TunnelConfiguration{
