@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	cloudflare "github.com/cloudflare/cloudflare-go"
@@ -98,6 +99,29 @@ func NewCloudFlareProvider(domainFilter endpoint.DomainFilter, zoneIDFilter prov
 	return provider, nil
 }
 
+// Records returns the list of records.
+func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint, error) {
+	resourceContainer := cloudflare.AccountIdentifier(p.accountIdentifier)
+	result, err := p.Client.GetTunnelConfiguration(ctx, resourceContainer, p.tunnelID)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get tunnel configuration: %v", err)
+	}
+	records := make([]*endpoint.Endpoint, len(result.Config.Ingress))
+	for _, rule := range result.Config.Ingress {
+		target, err := extractTarget(rule.Service)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract target: %v", err)
+		}
+		records = append(records, endpoint.NewEndpoint(
+			rule.Hostname,
+			"A",
+			rule.Service,
+			target,
+		))
+	}
+	return records, nil
+}
+
 // ApplyChanges applies a given set of changes in a given zone.
 func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
 	// return early if there is nothing to change
@@ -168,6 +192,19 @@ func newIngressRule(e *endpoint.Endpoint) cloudflare.UnvalidatedIngressRule {
 			NoTLSVerify: boolPtr(true),
 		},
 	}
+}
+
+func extractTarget(cfService string) (string, error) {
+	pattern := `([a-zA-Z0-9]+\.)+[a-zA-Z0-9]+`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", err
+	}
+	match := re.FindString(cfService)
+	if match == "" {
+		return "", fmt.Errorf("there is no match. regexp: %s, cfService: %s", pattern, cfService)
+	}
+	return match, nil
 }
 
 // AdjustEndpoints modifies the endpoints as needed by the specific provider
