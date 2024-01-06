@@ -193,7 +193,7 @@ func newIngressRule(e *endpoint.Endpoint) cloudflare.UnvalidatedIngressRule {
 }
 
 func extractTarget(cfService string) (string, error) {
-	pattern := `([a-zA-Z0-9]+\.)+[a-zA-Z0-9]+`
+	pattern := `(([a-zA-Z0-9]+\.)+[a-zA-Z0-9]+)|localhost`
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return "", err
