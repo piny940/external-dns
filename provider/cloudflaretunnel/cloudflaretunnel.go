@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -61,6 +62,11 @@ var recordTypeProxyNotSupported = map[string]bool{
 	"SRV": true,
 }
 
+const (
+	recordTypeA     = "A"
+	recordTypeCNAME = "CNAME"
+)
+
 // cloudFlareDNS is the subset of the CloudFlare API that we actually use.  Add methods as required. Signatures must match exactly.
 type cloudFlareDNS interface {
 	UserDetails(ctx context.Context) (cloudflare.User, error)
@@ -72,47 +78,57 @@ type cloudFlareDNS interface {
 	CreateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.CreateDNSRecordParams) (cloudflare.DNSRecord, error)
 	DeleteDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, recordID string) error
 	UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error
+	GetTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, tunnelID string) (cloudflare.TunnelConfigurationResult, error)
+	UpdateTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, cp cloudflare.TunnelConfigurationParams) (cloudflare.TunnelConfigurationResult, error)
 }
 
-type zoneService struct {
+type service struct {
 	service *cloudflare.API
 }
 
-func (z zoneService) UserDetails(ctx context.Context) (cloudflare.User, error) {
+func (z service) UserDetails(ctx context.Context) (cloudflare.User, error) {
 	return z.service.UserDetails(ctx)
 }
 
-func (z zoneService) ListZones(ctx context.Context, zoneID ...string) ([]cloudflare.Zone, error) {
+func (z service) ListZones(ctx context.Context, zoneID ...string) ([]cloudflare.Zone, error) {
 	return z.service.ListZones(ctx, zoneID...)
 }
 
-func (z zoneService) ZoneIDByName(zoneName string) (string, error) {
+func (z service) ZoneIDByName(zoneName string) (string, error) {
 	return z.service.ZoneIDByName(zoneName)
 }
 
-func (z zoneService) CreateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.CreateDNSRecordParams) (cloudflare.DNSRecord, error) {
+func (z service) CreateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.CreateDNSRecordParams) (cloudflare.DNSRecord, error) {
 	return z.service.CreateDNSRecord(ctx, rc, rp)
 }
 
-func (z zoneService) ListDNSRecords(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.ListDNSRecordsParams) ([]cloudflare.DNSRecord, *cloudflare.ResultInfo, error) {
+func (z service) ListDNSRecords(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.ListDNSRecordsParams) ([]cloudflare.DNSRecord, *cloudflare.ResultInfo, error) {
 	return z.service.ListDNSRecords(ctx, rc, rp)
 }
 
-func (z zoneService) UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error {
+func (z service) UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error {
 	_, err := z.service.UpdateDNSRecord(ctx, rc, rp)
 	return err
 }
 
-func (z zoneService) DeleteDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, recordID string) error {
+func (z service) DeleteDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, recordID string) error {
 	return z.service.DeleteDNSRecord(ctx, rc, recordID)
 }
 
-func (z zoneService) ListZonesContext(ctx context.Context, opts ...cloudflare.ReqOption) (cloudflare.ZonesResponse, error) {
+func (z service) ListZonesContext(ctx context.Context, opts ...cloudflare.ReqOption) (cloudflare.ZonesResponse, error) {
 	return z.service.ListZonesContext(ctx, opts...)
 }
 
-func (z zoneService) ZoneDetails(ctx context.Context, zoneID string) (cloudflare.Zone, error) {
+func (z service) ZoneDetails(ctx context.Context, zoneID string) (cloudflare.Zone, error) {
 	return z.service.ZoneDetails(ctx, zoneID)
+}
+
+func (z service) GetTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, tunnelID string) (cloudflare.TunnelConfigurationResult, error) {
+	return z.service.GetTunnelConfiguration(ctx, rc, tunnelID)
+}
+
+func (z service) UpdateTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, cp cloudflare.TunnelConfigurationParams) (cloudflare.TunnelConfigurationResult, error) {
+	return z.service.UpdateTunnelConfiguration(ctx, rc, cp)
 }
 
 // CloudFlareProvider is an implementation of Provider for CloudFlare DNS.
@@ -125,6 +141,8 @@ type CloudFlareProvider struct {
 	proxiedByDefault  bool
 	DryRun            bool
 	DNSRecordsPerPage int
+	TunnelID          string
+	AccountID         string
 }
 
 // cloudFlareChange differentiates between ChangActions
@@ -183,14 +201,24 @@ func NewCloudFlareProvider(domainFilter endpoint.DomainFilter, zoneIDFilter prov
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cloudflare provider: %v", err)
 	}
+	tunnelID := os.Getenv("CF_TUNNEL_ID")
+	if tunnelID == "" {
+		return nil, fmt.Errorf("tunnelID is empty")
+	}
+	accountID := os.Getenv("CF_ACCOUNT_ID")
+	if accountID == "" {
+		return nil, fmt.Errorf("accountID is empty")
+	}
 	provider := &CloudFlareProvider{
 		// Client: config,
-		Client:            zoneService{config},
+		Client:            service{config},
 		domainFilter:      domainFilter,
 		zoneIDFilter:      zoneIDFilter,
 		proxiedByDefault:  proxiedByDefault,
 		DryRun:            dryRun,
 		DNSRecordsPerPage: dnsRecordsPerPage,
+		TunnelID:          tunnelID,
+		AccountID:         accountID,
 	}
 	return provider, nil
 }
@@ -256,6 +284,33 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 		// and record to allow the planner to calculate the correct plan. See #992.
 		endpoints = append(endpoints, groupByNameAndType(records)...)
 	}
+	resourceContainer := cloudflare.AccountIdentifier(p.AccountID)
+	tunnelConf, err := p.Client.GetTunnelConfiguration(ctx, resourceContainer, p.TunnelID)
+	if err != nil {
+		return nil, err
+	}
+	targets := make(map[string]string, 0)
+	for _, ingress := range tunnelConf.Config.Ingress {
+		if ingress.Hostname == "" {
+			continue
+		}
+		target, err := p.extractTarget(ingress.Service)
+		if err != nil {
+			continue
+		}
+		targets[ingress.Hostname] = target
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.RecordType != recordTypeCNAME {
+			continue
+		}
+		for i, target := range endpoint.Targets {
+			if target == p.tunnelTarget() {
+				endpoint.Targets[i] = targets[endpoint.DNSName]
+				endpoint.RecordType = recordTypeA
+			}
+		}
+	}
 
 	return endpoints, nil
 }
@@ -312,6 +367,15 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 	// separate into per-zone change sets to be passed to the API.
 	changesByZone := p.changesByZone(zones, changes)
 
+	accountResourceContainer := cloudflare.AccountIdentifier(p.AccountID)
+	oldConf, err := p.Client.GetTunnelConfiguration(ctx, accountResourceContainer, p.TunnelID)
+	if err != nil {
+		log.Errorf("failed to get tunnel configuration: %v", err)
+		return err
+	}
+	ingresses := make([]cloudflare.UnvalidatedIngressRule, len(oldConf.Config.Ingress))
+	copy(ingresses, oldConf.Config.Ingress)
+
 	var failedZones []string
 	for zoneID, changes := range changesByZone {
 		records, err := p.listDNSRecordsWithAutoPagination(ctx, zoneID)
@@ -361,6 +425,10 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 					log.WithFields(logFields).Errorf("failed to delete record: %v", err)
 				}
 			} else if change.Action == cloudFlareCreate {
+				if change.ResourceRecord.Type == "A" {
+					change = p.cnameChange(*change)
+					ingresses = append(ingresses, newIngress(*change))
+				}
 				recordParam := getCreateDNSRecordParam(*change)
 				_, err := p.Client.CreateDNSRecord(ctx, resourceContainer, recordParam)
 				if err != nil {
@@ -377,6 +445,20 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 
 	if len(failedZones) > 0 {
 		return fmt.Errorf("failed to submit all changes for the following zones: %v", failedZones)
+	}
+
+	confParam := cloudflare.TunnelConfigurationParams{
+		TunnelID: p.TunnelID,
+		Config: cloudflare.TunnelConfiguration{
+			Ingress:       ingresses,
+			WarpRouting:   oldConf.Config.WarpRouting,
+			OriginRequest: oldConf.Config.OriginRequest,
+		},
+	}
+	_, err = p.Client.UpdateTunnelConfiguration(ctx, accountResourceContainer, confParam)
+	if err != nil {
+		log.Errorf("failed to update tunnel configuration: %v", err)
+		return err
 	}
 
 	return nil
@@ -446,6 +528,48 @@ func (p *CloudFlareProvider) newCloudFlareChange(action string, endpoint *endpoi
 			Content: target,
 		},
 	}
+}
+
+func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
+	return cloudflare.UnvalidatedIngressRule{
+		Hostname: change.ResourceRecord.Name,
+		Path:     "",
+		Service:  fmt.Sprintf("https://%v:443", change.ResourceRecord.Content),
+		OriginRequest: &cloudflare.OriginRequestConfig{
+			Http2Origin: boolPtr(true),
+			NoTLSVerify: boolPtr(true),
+		},
+	}
+}
+
+func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareChange {
+	return &cloudFlareChange{
+		Action: change.Action,
+		ResourceRecord: cloudflare.DNSRecord{
+			Name:    change.ResourceRecord.Name,
+			TTL:     change.ResourceRecord.TTL,
+			Proxied: boolPtr(true),
+			Type:    recordTypeCNAME,
+			Content: p.tunnelTarget(),
+		},
+	}
+}
+
+func (p *CloudFlareProvider) tunnelTarget() string {
+	return fmt.Sprintf("%s.cfargotunnel.com", p.TunnelID)
+}
+
+func (p *CloudFlareProvider) extractTarget(cfService string) (string, error) {
+	pattern := `(([a-zA-Z0-9]+\.)+[a-zA-Z0-9]+)|localhost`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", err
+	}
+	match := re.FindString(cfService)
+	if match == "" {
+		return "", fmt.Errorf("there is no match. regexp: %s, cfService: %s", pattern, cfService)
+	}
+	return match, nil
 }
 
 // listDNSRecords performs automatic pagination of results on requests to cloudflare.ListDNSRecords with custom per_page values
