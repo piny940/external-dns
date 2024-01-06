@@ -162,7 +162,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 		delete(ingresses, change.DNSName)
 	}
 
-	newIngress := make([]cloudflare.UnvalidatedIngressRule, len(ingresses))
+	newIngress := make([]cloudflare.UnvalidatedIngressRule, 0)
 	for _, v := range ingresses {
 		newIngress = append(newIngress, v)
 	}
