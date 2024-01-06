@@ -137,7 +137,12 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	}
 
 	ingresses := make(map[string]cloudflare.UnvalidatedIngressRule)
+	var catchAll cloudflare.UnvalidatedIngressRule
 	for _, ingress := range oldConf.Config.Ingress {
+		if ingress.Hostname == "" {
+			catchAll = ingress
+			continue
+		}
 		ingresses[ingress.Hostname] = ingress
 	}
 	log.Infof("Create: %v, UpdateNew: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.Delete)
@@ -166,6 +171,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	for _, v := range ingresses {
 		newIngress = append(newIngress, v)
 	}
+	newIngress = append(newIngress, catchAll)
 	log.Infof("start to change records. before: %v, after: %v", oldConf.Config.Ingress, newIngress)
 	newConf := cloudflare.TunnelConfigurationParams{
 		TunnelID: p.tunnelID,
