@@ -106,7 +106,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get tunnel configuration: %v", err)
 	}
-	records := make([]*endpoint.Endpoint, len(result.Config.Ingress))
+	records := make([]*endpoint.Endpoint, 0)
 	for _, rule := range result.Config.Ingress {
 		target, err := extractTarget(rule.Service)
 		if err != nil {
