@@ -191,6 +191,7 @@ func (p *Plan) Calculate() *Plan {
 			}
 		}
 
+		log.Infof("current: %v, candidates: %v", row.current, row.candidates)
 		// dns name released or possibly owned by a different external dns
 		if len(row.current) > 0 && len(row.candidates) == 0 {
 			changes.Delete = append(changes.Delete, row.current...)
