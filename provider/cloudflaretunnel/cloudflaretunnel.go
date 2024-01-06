@@ -140,6 +140,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	for _, ingress := range oldConf.Config.Ingress {
 		ingresses[ingress.Hostname] = ingress
 	}
+	log.Infof("Create: %v, UpdateNew: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.Delete)
 
 	for _, change := range changes.Create {
 		ingresses[change.DNSName] = newIngressRule(change)
@@ -182,6 +183,7 @@ func includesHost(ingress []cloudflare.UnvalidatedIngressRule, hostname string) 
 }
 
 func newIngressRule(e *endpoint.Endpoint) cloudflare.UnvalidatedIngressRule {
+	log.Infof("target: %v", e.Targets[0])
 	return cloudflare.UnvalidatedIngressRule{
 		Hostname: e.DNSName,
 		Path:     "/",
