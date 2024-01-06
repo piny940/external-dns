@@ -180,8 +180,6 @@ func includesHost(ingress []cloudflare.UnvalidatedIngressRule, hostname string) 
 	return false
 }
 
-func updateIngress(ingress []*cloudflare.UnvalidatedIngressRule)
-
 func newIngressRule(e *endpoint.Endpoint) cloudflare.UnvalidatedIngressRule {
 	return cloudflare.UnvalidatedIngressRule{
 		Hostname: e.DNSName,
