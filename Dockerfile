@@ -19,4 +19,4 @@ RUN mkdir /lib64 \
 
 COPY --from=build /app/main .
 
-CMD [ "/app/main", "-e", "production" ]
+CMD [ "/app/main" ]
