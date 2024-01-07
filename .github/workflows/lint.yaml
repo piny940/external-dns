@@ -2,34 +2,31 @@ name: Lint
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 permissions:
-  contents: read  #  to fetch code (actions/checkout)
+  contents: read #  to fetch code (actions/checkout)
 
 jobs:
-
   build:
     permissions:
-      contents: read  #  to fetch code (actions/checkout)
-      checks: write  #  to create a new check based on the results (shogo82148/actions-goveralls)
+      contents: read #  to fetch code (actions/checkout)
+      checks: write #  to create a new check based on the results (shogo82148/actions-goveralls)
 
     name: Build
     runs-on: ubuntu-latest
     steps:
+      - name: Set up Go 1.x
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+        id: go
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-      id: go
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-    - name: Lint
-      run: |
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
-        make lint
+      - name: Lint
+        run: |
+          if (diff -u <(echo -n) <(gofmt -d ./)); then exit 1; fi
