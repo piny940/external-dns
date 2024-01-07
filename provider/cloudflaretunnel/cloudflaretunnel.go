@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -373,8 +374,9 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			return fmt.Errorf("could not fetch records from zone, %v", err)
 		}
 
+		filteredChanged := p.filteredChanges(changes, records, newConf.Ingress)
 		var failedChange bool
-		for _, change := range changes {
+		for _, change := range filteredChanged {
 			logFields := log.Fields{
 				"record": change.ResourceRecord.Name,
 				"type":   change.ResourceRecord.Type,
@@ -390,14 +392,10 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			}
 
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
-			aConfiguredChange := *change
-			if change.ResourceRecord.Type == endpoint.RecordTypeA {
-				aConfiguredChange = *p.cnameChange(*change)
-			}
-			if aConfiguredChange.Action == cloudFlareDelete {
-				recordID := p.getRecordID(records, aConfiguredChange.ResourceRecord)
+			if change.Action == cloudFlareDelete {
+				recordID := p.getRecordID(records, change.ResourceRecord)
 				if recordID == "" {
-					log.WithFields(logFields).Errorf("failed to find previous record: %v", aConfiguredChange.ResourceRecord)
+					log.WithFields(logFields).Errorf("failed to find previous record: %v", change.ResourceRecord)
 					continue
 				}
 				err := p.Client.DeleteDNSRecord(ctx, resourceContainer, recordID)
@@ -405,8 +403,8 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 					failedChange = true
 					log.WithFields(logFields).Errorf("failed to delete record: %v", err)
 				}
-			} else if aConfiguredChange.Action == cloudFlareCreate {
-				recordParam := getCreateDNSRecordParam(aConfiguredChange)
+			} else if change.Action == cloudFlareCreate {
+				recordParam := getCreateDNSRecordParam(*change)
 				_, err := p.Client.CreateDNSRecord(ctx, resourceContainer, recordParam)
 				if err != nil {
 					failedChange = true
@@ -599,6 +597,54 @@ func (p *CloudFlareProvider) extractTarget(cfService string) (string, error) {
 		return "", fmt.Errorf("there is no match. regexp: %s, cfService: %s", pattern, cfService)
 	}
 	return match, nil
+}
+
+func (p *CloudFlareProvider) filteredChanges(changes []*cloudFlareChange, currentRecords []cloudflare.DNSRecord, newIngress []cloudflare.UnvalidatedIngressRule) []*cloudFlareChange {
+	filteredChanges := make([]*cloudFlareChange, 0)
+	for _, change := range changes {
+		if change.ResourceRecord.Type != endpoint.RecordTypeA {
+			filteredChanges = append(filteredChanges, change)
+		}
+	}
+
+	currentTunnelDNS := make([]string, 0)
+	for _, record := range currentRecords {
+		if record.Type == endpoint.RecordTypeCNAME && record.Content == p.tunnelTarget() {
+			currentTunnelDNS = append(currentTunnelDNS, record.Name)
+		}
+	}
+	desiredTunnelDNS := make([]string, 0)
+	for _, rule := range newIngress {
+		desiredTunnelDNS = append(desiredTunnelDNS, rule.Hostname)
+	}
+
+	for _, current := range currentTunnelDNS {
+		if !slices.Contains(desiredTunnelDNS, current) {
+			filteredChanges = append(filteredChanges, &cloudFlareChange{
+				Action: cloudFlareDelete,
+				ResourceRecord: cloudflare.DNSRecord{
+					Name:    current,
+					Type:    endpoint.RecordTypeCNAME,
+					Content: p.tunnelTarget(),
+				},
+			})
+		}
+	}
+	for _, desired := range desiredTunnelDNS {
+		if !slices.Contains(currentTunnelDNS, desired) {
+			filteredChanges = append(filteredChanges, &cloudFlareChange{
+				Action: cloudFlareCreate,
+				ResourceRecord: cloudflare.DNSRecord{
+					Name:    desired,
+					TTL:     defaultCloudFlareRecordTTL,
+					Proxied: proxyEnabled,
+					Type:    endpoint.RecordTypeCNAME,
+					Content: p.tunnelTarget(),
+				},
+			})
+		}
+	}
+	return filteredChanges
 }
 
 // listDNSRecords performs automatic pagination of results on requests to cloudflare.ListDNSRecords with custom per_page values
