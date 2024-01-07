@@ -312,6 +312,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 		}
 	}
 
+	log.Infof("current records: %v", endpoints)
 	return endpoints, nil
 }
 
@@ -361,9 +362,7 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 	}
 
 	zones, err := p.Zones(ctx)
-	if err != nil {
-		return err
-	}
+
 	// separate into per-zone change sets to be passed to the API.
 	changesByZone := p.changesByZone(zones, changes)
 
