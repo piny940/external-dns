@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -474,6 +473,10 @@ func (p *CloudFlareProvider) changesByZone(zones []cloudflare.Zone, changeSet []
 }
 
 func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfiguration, changes []*cloudFlareChange) (cloudflare.TunnelConfiguration, error) {
+	log.Info("Changes: ")
+	for _, change := range changes {
+		log.Infof("Change: %+v", change)
+	}
 	oldTargets := make(map[string]string, 0)
 	for _, ingress := range oldConf.Ingress {
 		if ingress.Hostname == "" {
@@ -601,49 +604,44 @@ func (p *CloudFlareProvider) extractTarget(cfService string) (string, error) {
 
 func (p *CloudFlareProvider) filteredChanges(changes []*cloudFlareChange, currentRecords []cloudflare.DNSRecord, newIngress []cloudflare.UnvalidatedIngressRule) []*cloudFlareChange {
 	filteredChanges := make([]*cloudFlareChange, 0)
+	tunnelCreations := make([]string, 0)
+	tunnelDeletions := make([]string, 0)
 	for _, change := range changes {
 		if change.ResourceRecord.Type != endpoint.RecordTypeA {
 			filteredChanges = append(filteredChanges, change)
+			continue
+		}
+		if change.Action == cloudFlareCreate {
+			tunnelCreations = append(tunnelCreations, change.ResourceRecord.Name)
+		} else if change.Action == cloudFlareDelete {
+			tunnelDeletions = append(tunnelDeletions, change.ResourceRecord.Name)
 		}
 	}
 
-	currentTunnelDNS := make([]string, 0)
-	for _, record := range currentRecords {
-		if record.Type == endpoint.RecordTypeCNAME && record.Content == p.tunnelTarget() {
-			currentTunnelDNS = append(currentTunnelDNS, record.Name)
-		}
+	add, remove, _ := provider.Difference(tunnelDeletions, tunnelCreations)
+	for _, dnsName := range add {
+		filteredChanges = append(filteredChanges, &cloudFlareChange{
+			Action: cloudFlareCreate,
+			ResourceRecord: cloudflare.DNSRecord{
+				Name:    dnsName,
+				TTL:     defaultCloudFlareRecordTTL,
+				Proxied: proxyEnabled,
+				Type:    endpoint.RecordTypeCNAME,
+				Content: p.tunnelTarget(),
+			},
+		})
 	}
-	desiredTunnelDNS := make([]string, 0)
-	for _, rule := range newIngress {
-		desiredTunnelDNS = append(desiredTunnelDNS, rule.Hostname)
+	for _, dnsName := range remove {
+		filteredChanges = append(filteredChanges, &cloudFlareChange{
+			Action: cloudFlareDelete,
+			ResourceRecord: cloudflare.DNSRecord{
+				Name:    dnsName,
+				Type:    endpoint.RecordTypeCNAME,
+				Content: p.tunnelTarget(),
+			},
+		})
 	}
 
-	for _, current := range currentTunnelDNS {
-		if !slices.Contains(desiredTunnelDNS, current) {
-			filteredChanges = append(filteredChanges, &cloudFlareChange{
-				Action: cloudFlareDelete,
-				ResourceRecord: cloudflare.DNSRecord{
-					Name:    current,
-					Type:    endpoint.RecordTypeCNAME,
-					Content: p.tunnelTarget(),
-				},
-			})
-		}
-	}
-	for _, desired := range desiredTunnelDNS {
-		if !slices.Contains(currentTunnelDNS, desired) {
-			filteredChanges = append(filteredChanges, &cloudFlareChange{
-				Action: cloudFlareCreate,
-				ResourceRecord: cloudflare.DNSRecord{
-					Name:    desired,
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyEnabled,
-					Type:    endpoint.RecordTypeCNAME,
-					Content: p.tunnelTarget(),
-				},
-			})
-		}
-	}
 	return filteredChanges
 }
 

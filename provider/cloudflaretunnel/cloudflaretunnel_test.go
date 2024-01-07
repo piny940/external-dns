@@ -65,15 +65,6 @@ var ExampleDomain = []cloudflare.DNSRecord{
 		Proxied: proxyEnabled,
 	},
 	{
-		ID:      "2345678901",
-		ZoneID:  "001",
-		Name:    "foobar.bar.com",
-		Type:    endpoint.RecordTypeCNAME,
-		TTL:     120,
-		Content: tunnelTarget,
-		Proxied: proxyEnabled,
-	},
-	{
 		ID:      "1231231233",
 		ZoneID:  "002",
 		Name:    "bar.foo.com",
@@ -89,9 +80,6 @@ var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 		{
 			Hostname: "foobar.bar.com",
 			Service:  "https://1.2.3.4:443",
-		}, {
-			Hostname: "foobar.bar.com",
-			Service:  "https://3.4.5.6:443",
 		},
 		{
 			Hostname: "bar.foo.com",
@@ -1240,6 +1228,7 @@ func TestProviderPropertiesIdempotency(t *testing.T) {
 }
 
 func TestCloudflareComplexUpdate(t *testing.T) {
+	os.Setenv("CF_TUNNEL_ID", tunnelID)
 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
 		"001": ExampleDomain,
 	}, ExampleTunnelConf)
