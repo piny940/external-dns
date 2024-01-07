@@ -509,7 +509,7 @@ func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfigura
 		} else if change.Action == cloudFlareDelete {
 			changeWithContent := *change
 			changeWithContent.ResourceRecord.Content = oldTargets[change.ResourceRecord.Name]
-			ingressIdx, err := p.ingressIndexOf(ingresses, newIngress(changeWithContent))
+			ingressIdx, err := p.indexOfIngress(ingresses, newIngress(changeWithContent))
 			if err != nil {
 				log.Errorf("failed to find tunnel ingress: %v", err)
 				return oldConf, err
@@ -565,7 +565,7 @@ func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
 	}
 }
 
-func (p *CloudFlareProvider) ingressIndexOf(ingresses []cloudflare.UnvalidatedIngressRule, ingress cloudflare.UnvalidatedIngressRule) (int, error) {
+func (p *CloudFlareProvider) indexOfIngress(ingresses []cloudflare.UnvalidatedIngressRule, ingress cloudflare.UnvalidatedIngressRule) (int, error) {
 	for i, item := range ingresses {
 		if item.Hostname == ingress.Hostname && item.Service == ingress.Service {
 			return i, nil
