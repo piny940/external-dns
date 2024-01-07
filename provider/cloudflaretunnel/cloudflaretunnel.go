@@ -455,6 +455,7 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			OriginRequest: oldConf.Config.OriginRequest,
 		},
 	}
+	log.Infof("start change tunnel configuration. before: %v, after: %v", oldConf.Config.Ingress, ingresses)
 	_, err = p.Client.UpdateTunnelConfiguration(ctx, accountResourceContainer, confParam)
 	if err != nil {
 		log.Errorf("failed to update tunnel configuration: %v", err)
