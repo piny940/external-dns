@@ -51,33 +51,48 @@ type mockCloudFlareClient struct {
 	dnsRecordsError error
 }
 
+var tunnelID = "jhioerafajiofewajiofewfer"
+
 var ExampleDomain = []cloudflare.DNSRecord{
 	{
 		ID:      "1234567890",
 		ZoneID:  "001",
 		Name:    "foobar.bar.com",
-		Type:    endpoint.RecordTypeA,
+		Type:    endpoint.RecordTypeCNAME,
 		TTL:     120,
-		Content: "1.2.3.4",
-		Proxied: proxyDisabled,
+		Content: fmt.Sprintf("%s.cfargotunnel.com", tunnelID),
+		Proxied: proxyEnabled,
 	},
 	{
 		ID:      "2345678901",
 		ZoneID:  "001",
 		Name:    "foobar.bar.com",
-		Type:    endpoint.RecordTypeA,
+		Type:    endpoint.RecordTypeCNAME,
 		TTL:     120,
 		Content: "3.4.5.6",
-		Proxied: proxyDisabled,
+		Proxied: proxyEnabled,
 	},
 	{
 		ID:      "1231231233",
 		ZoneID:  "002",
 		Name:    "bar.foo.com",
-		Type:    endpoint.RecordTypeA,
+		Type:    endpoint.RecordTypeCNAME,
 		TTL:     1,
-		Content: "2.3.4.5",
-		Proxied: proxyDisabled,
+		Content: fmt.Sprintf("%s.cfargotunnel.com", tunnelID),
+		Proxied: proxyEnabled,
+	},
+}
+
+var ExampleTunnelConf = cloudflare.TunnelConfiguration{
+	Ingress: []cloudflare.UnvalidatedIngressRule{
+		{
+			Hostname: "foobar.bar.com",
+			Service:  "https://1.2.3.4:443",
+		},
+		{
+			Hostname: "bar.foo.com",
+			Service:  "https://2.3.4.5:443",
+		},
 	},
 }
 
@@ -92,19 +107,10 @@ func NewMockCloudFlareClient() *mockCloudFlareClient {
 			"001": {},
 			"002": {},
 		},
-		TunnelConf: cloudflare.TunnelConfiguration{
-			Ingress: []cloudflare.UnvalidatedIngressRule{
-				{
-					Hostname: "bar.com",
-					Path:     "",
-					Service:  "0.0.0.0",
-				},
-			},
-		},
 	}
 }
 
-func NewMockCloudFlareClientWithRecords(records map[string][]cloudflare.DNSRecord) *mockCloudFlareClient {
+func NewMockCloudFlareClientWithRecords(records map[string][]cloudflare.DNSRecord, conf cloudflare.TunnelConfiguration) *mockCloudFlareClient {
 	m := NewMockCloudFlareClient()
 
 	for zoneID, zoneRecords := range records {
@@ -114,6 +120,7 @@ func NewMockCloudFlareClientWithRecords(records map[string][]cloudflare.DNSRecor
 			}
 		}
 	}
+	m.TunnelConf = conf
 
 	return m
 }
@@ -357,6 +364,13 @@ func AssertActions(t *testing.T, provider *CloudFlareProvider, endpoints []*endp
 	}
 
 	td.Cmp(t, client.Actions, actions, args...)
+}
+
+func AssertTunnelConf(t *testing.T, provider *CloudFlareProvider, expected cloudflare.TunnelConfiguration) {
+	t.Helper()
+
+	client := provider.Client.(*mockCloudFlareClient)
+	td.Cmp(t, client.TunnelConf, expected)
 }
 
 func TestCloudflareA(t *testing.T) {

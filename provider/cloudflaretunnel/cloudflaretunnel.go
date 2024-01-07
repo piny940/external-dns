@@ -577,7 +577,7 @@ func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareCha
 		ResourceRecord: cloudflare.DNSRecord{
 			Name:    change.ResourceRecord.Name,
 			TTL:     change.ResourceRecord.TTL,
-			Proxied: boolPtr(true),
+			Proxied: proxyEnabled,
 			Type:    endpoint.RecordTypeCNAME,
 			Content: p.tunnelTarget(),
 		},
