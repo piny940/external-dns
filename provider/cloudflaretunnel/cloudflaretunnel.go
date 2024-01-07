@@ -489,7 +489,7 @@ func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfigura
 		}
 		oldTargets[ingress.Hostname] = target
 	}
-	ingresses := make([]cloudflare.UnvalidatedIngressRule, 0)
+	ingresses := make([]cloudflare.UnvalidatedIngressRule, 0, len(oldTargets))
 	var catchAll cloudflare.UnvalidatedIngressRule
 	for _, rule := range oldConf.Ingress {
 		if rule.Hostname == "" {
