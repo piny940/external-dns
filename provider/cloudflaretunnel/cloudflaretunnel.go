@@ -318,7 +318,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 
 // ApplyChanges applies a given set of changes in a given zone.
 func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) error {
-	log.Infof("Create: %v, UpdateNew: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.Delete)
+	log.Infof("Create: %v, UpdateNew: %v, UpdateOld: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.UpdateOld, changes.Delete)
 	cloudflareChanges := []*cloudFlareChange{}
 
 	for _, endpoint := range changes.Create {
@@ -330,6 +330,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	for i, desired := range changes.UpdateNew {
 		current := changes.UpdateOld[i]
 
+		log.Infof("check difference. current targets: %v, desired targets: %v", current.Targets, desired.Targets)
 		add, remove, leave := provider.Difference(current.Targets, desired.Targets)
 
 		for _, a := range remove {
