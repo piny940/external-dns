@@ -402,6 +402,10 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
 			if change.Action == cloudFlareUpdate {
+				if change.ResourceRecord.Type == "A" {
+					log.Info("skipping: update record type is A")
+					continue
+				}
 				recordID := p.getRecordID(records, change.ResourceRecord)
 				if recordID == "" {
 					log.WithFields(logFields).Errorf("failed to find previous record: %v", change.ResourceRecord)
@@ -415,6 +419,10 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 					log.WithFields(logFields).Errorf("failed to update record: %v", err)
 				}
 			} else if change.Action == cloudFlareDelete {
+				if change.ResourceRecord.Type == "A" {
+					log.Info("skipping: delete record type is A")
+					continue
+				}
 				recordID := p.getRecordID(records, change.ResourceRecord)
 				if recordID == "" {
 					log.WithFields(logFields).Errorf("failed to find previous record: %v", change.ResourceRecord)
