@@ -60,11 +60,6 @@ var recordTypeProxyNotSupported = map[string]bool{
 	"SRV": true,
 }
 
-const (
-	recordTypeA     = "A"
-	recordTypeCNAME = "CNAME"
-)
-
 // cloudFlareDNS is the subset of the CloudFlare API that we actually use.  Add methods as required. Signatures must match exactly.
 type cloudFlareDNS interface {
 	UserDetails(ctx context.Context) (cloudflare.User, error)
@@ -287,7 +282,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 	if err != nil {
 		return nil, err
 	}
-	targets := make(map[string]string, 0)
+	ingressTargets := make(map[string]string, 0)
 	for _, ingress := range tunnelConf.Config.Ingress {
 		if ingress.Hostname == "" {
 			continue
@@ -296,17 +291,17 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 		if err != nil {
 			continue
 		}
-		targets[ingress.Hostname] = target
+		ingressTargets[ingress.Hostname] = target
 	}
 	// If recordType is CNAME and target is tunnelTarget, treat it as A record
-	for _, endpoint := range endpoints {
-		if endpoint.RecordType != recordTypeCNAME {
+	for _, e := range endpoints {
+		if e.RecordType != endpoint.RecordTypeCNAME {
 			continue
 		}
-		for i, target := range endpoint.Targets {
+		for i, target := range e.Targets {
 			if target == p.tunnelTarget() {
-				endpoint.Targets[i] = targets[endpoint.DNSName]
-				endpoint.RecordType = recordTypeA
+				e.Targets[i] = ingressTargets[e.DNSName]
+				e.RecordType = endpoint.RecordTypeA
 			}
 		}
 	}
@@ -387,7 +382,7 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
 			aConfiguredChange := *change
-			if change.ResourceRecord.Type == "A" {
+			if change.ResourceRecord.Type == endpoint.RecordTypeA {
 				aConfiguredChange = *p.cnameChange(*change)
 			}
 			if aConfiguredChange.Action == cloudFlareDelete {
@@ -494,7 +489,7 @@ func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfigura
 		}
 		oldTargets[ingress.Hostname] = target
 	}
-	ingresses := make([]cloudflare.UnvalidatedIngressRule, len(oldConf.Ingress))
+	ingresses := make([]cloudflare.UnvalidatedIngressRule, 0)
 	var catchAll cloudflare.UnvalidatedIngressRule
 	for _, rule := range oldConf.Ingress {
 		if rule.Hostname == "" {
@@ -585,7 +580,7 @@ func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareCha
 			Name:    change.ResourceRecord.Name,
 			TTL:     change.ResourceRecord.TTL,
 			Proxied: boolPtr(true),
-			Type:    recordTypeCNAME,
+			Type:    endpoint.RecordTypeCNAME,
 			Content: p.tunnelTarget(),
 		},
 	}
