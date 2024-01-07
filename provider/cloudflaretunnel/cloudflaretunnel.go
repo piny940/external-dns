@@ -353,6 +353,17 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 		return nil
 	}
 
+	accountResourceContainer := cloudflare.AccountIdentifier(p.AccountID)
+	oldConf, err := p.Client.GetTunnelConfiguration(ctx, accountResourceContainer, p.TunnelID)
+	if err != nil {
+		log.Errorf("failed to get tunnel configuration: %v", err)
+		return err
+	}
+	newConf, err := p.updateTunnelConf(oldConf.Config, changes)
+	if err != nil {
+		return err
+	}
+
 	zones, err := p.Zones(ctx)
 
 	// separate into per-zone change sets to be passed to the API.
@@ -414,17 +425,6 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 
 	if len(failedZones) > 0 {
 		return fmt.Errorf("failed to submit all changes for the following zones: %v", failedZones)
-	}
-
-	accountResourceContainer := cloudflare.AccountIdentifier(p.AccountID)
-	oldConf, err := p.Client.GetTunnelConfiguration(ctx, accountResourceContainer, p.TunnelID)
-	if err != nil {
-		log.Errorf("failed to get tunnel configuration: %v", err)
-		return err
-	}
-	newConf, err := p.updateTunnelConf(oldConf.Config, changes)
-	if err != nil {
-		return err
 	}
 
 	confParam := cloudflare.TunnelConfigurationParams{
