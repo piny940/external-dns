@@ -622,6 +622,7 @@ func (p *CloudFlareProvider) filteredChanges(changes []*cloudFlareChange, curren
 
 	add, remove, _ := provider.Difference(tunnelDeletions, tunnelCreations)
 	for _, dnsName := range add {
+		fmt.Println("addddddddddddddddd")
 		filteredChanges = append(filteredChanges, &cloudFlareChange{
 			Action: cloudFlareCreate,
 			ResourceRecord: cloudflare.DNSRecord{

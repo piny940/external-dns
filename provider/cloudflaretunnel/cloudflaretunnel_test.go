@@ -412,7 +412,7 @@ func TestCloudflareCname(t *testing.T) {
 		{
 			RecordType: "CNAME",
 			DNSName:    "cname.bar.com",
-			Targets:    endpoint.Targets{"google.com"},
+			Targets:    endpoint.Targets{"google.com", "facebook.com"},
 		},
 	}
 
@@ -425,6 +425,47 @@ func TestCloudflareCname(t *testing.T) {
 				Name:    "cname.bar.com",
 				Content: "google.com",
 				TTL:     1,
+				Proxied: proxyDisabled,
+			},
+		},
+		{
+			Name:   "Create",
+			ZoneId: "001",
+			RecordData: cloudflare.DNSRecord{
+				Type:    "CNAME",
+				Name:    "cname.bar.com",
+				Content: "facebook.com",
+				TTL:     1,
+				Proxied: proxyDisabled,
+			},
+		},
+	},
+		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+		[]cloudflare.UnvalidatedIngressRule{
+			catchAll,
+		},
+	)
+}
+
+func TestNoCloudflareCustomTTL(t *testing.T) {
+	endpoints := []*endpoint.Endpoint{
+		{
+			RecordType: "A",
+			DNSName:    "ttl.bar.com",
+			Targets:    endpoint.Targets{"127.0.0.1"},
+			RecordTTL:  120,
+		},
+	}
+
+	AssertActions(t, &CloudFlareProvider{TunnelID: tunnelID}, endpoints, []MockAction{
+		{
+			Name:   "Create",
+			ZoneId: "001",
+			RecordData: cloudflare.DNSRecord{
+				Type:    "CNAME",
+				Name:    "ttl.bar.com",
+				Content: tunnelTarget,
+				TTL:     defaultCloudFlareRecordTTL,
 				Proxied: proxyEnabled,
 			},
 		},
@@ -432,67 +473,14 @@ func TestCloudflareCname(t *testing.T) {
 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
 		[]cloudflare.UnvalidatedIngressRule{
 			{
-				Hostname:      "cname.bar.com",
-				Service:       toHttps("google.com"),
+				Hostname:      "ttl.bar.com",
+				Service:       toHttps("127.0.0.1"),
 				OriginRequest: defaultOriginRequest,
 			},
 			catchAll,
 		},
 	)
 }
-
-// func TestCloudflareCustomTTL(t *testing.T) {
-// 	endpoints := []*endpoint.Endpoint{
-// 		{
-// 			RecordType: "A",
-// 			DNSName:    "ttl.bar.com",
-// 			Targets:    endpoint.Targets{"127.0.0.1"},
-// 			RecordTTL:  120,
-// 		},
-// 	}
-
-// 	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
-// 		{
-// 			Name:   "Create",
-// 			ZoneId: "001",
-// 			RecordData: cloudflare.DNSRecord{
-// 				Type:    "A",
-// 				Name:    "ttl.bar.com",
-// 				Content: "127.0.0.1",
-// 				TTL:     120,
-// 				Proxied: proxyDisabled,
-// 			},
-// 		},
-// 	},
-// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-// 	)
-// }
-
-// func TestCloudflareProxiedDefault(t *testing.T) {
-// 	endpoints := []*endpoint.Endpoint{
-// 		{
-// 			RecordType: "A",
-// 			DNSName:    "bar.com",
-// 			Targets:    endpoint.Targets{"127.0.0.1"},
-// 		},
-// 	}
-
-// 	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
-// 		{
-// 			Name:   "Create",
-// 			ZoneId: "001",
-// 			RecordData: cloudflare.DNSRecord{
-// 				Type:    "A",
-// 				Name:    "bar.com",
-// 				Content: "127.0.0.1",
-// 				TTL:     1,
-// 				Proxied: proxyEnabled,
-// 			},
-// 		},
-// 	},
-// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-// 	)
-// }
 
 // func TestCloudflareProxiedOverrideTrue(t *testing.T) {
 // 	endpoints := []*endpoint.Endpoint{
