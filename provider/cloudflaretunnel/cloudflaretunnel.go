@@ -119,6 +119,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 			target,
 		))
 	}
+	log.Infof("current records: %v", records)
 	return records, nil
 }
 
@@ -129,6 +130,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 		log.Info("All records are already up to date")
 		return nil
 	}
+	log.Infof("Create: %v, UpdateNew: %v, Delete: %v", changes.Create, changes.UpdateNew, changes.Delete)
 	resourceContainer := cloudflare.AccountIdentifier(p.accountIdentifier)
 	oldConf, err := p.Client.GetTunnelConfiguration(ctx, resourceContainer, p.tunnelID)
 	if err != nil {
