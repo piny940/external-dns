@@ -397,7 +397,6 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
 			if change.Action == cloudFlareDelete {
 				if change.ResourceRecord.Type == "A" {
-					change = p.cnameChange(*change)
 					ingressIdx, err := p.ingressIndexOf(ingresses, newIngress(*change))
 					if err != nil {
 						log.WithFields(logFields).Errorf("failed to find tunnel ingress: %v", err)
@@ -405,6 +404,7 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 					}
 					// delete ingress
 					ingresses = append(ingresses[:ingressIdx], ingresses[ingressIdx+1:]...)
+					change = p.cnameChange(*change)
 				}
 				recordID := p.getRecordID(records, change.ResourceRecord)
 				if recordID == "" {
@@ -418,8 +418,8 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 				}
 			} else if change.Action == cloudFlareCreate {
 				if change.ResourceRecord.Type == "A" {
-					change = p.cnameChange(*change)
 					ingresses = append(ingresses, newIngress(*change))
+					change = p.cnameChange(*change)
 				}
 				recordParam := getCreateDNSRecordParam(*change)
 				_, err := p.Client.CreateDNSRecord(ctx, resourceContainer, recordParam)
