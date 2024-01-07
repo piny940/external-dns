@@ -85,6 +85,10 @@ var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 			Hostname: "bar.foo.com",
 			Service:  "https://2.3.4.5:443",
 		},
+		{
+			Hostname: "",
+			Service:  "http_404",
+		},
 	},
 }
 
@@ -1228,13 +1232,13 @@ func TestProviderPropertiesIdempotency(t *testing.T) {
 }
 
 func TestCloudflareComplexUpdate(t *testing.T) {
-	os.Setenv("CF_TUNNEL_ID", tunnelID)
 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
 		"001": ExampleDomain,
 	}, ExampleTunnelConf)
 
 	provider := &CloudFlareProvider{
-		Client: client,
+		Client:   client,
+		TunnelID: tunnelID,
 	}
 	ctx := context.Background()
 
@@ -1247,7 +1251,7 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 	endpoints, err := provider.AdjustEndpoints([]*endpoint.Endpoint{
 		{
 			DNSName:    "foobar.bar.com",
-			Targets:    endpoint.Targets{"1.2.3.4", "2.3.4.5"},
+			Targets:    endpoint.Targets{"2.3.4.5"},
 			RecordType: endpoint.RecordTypeA,
 			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
 			Labels:     endpoint.Labels{},
@@ -1269,7 +1273,22 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 		t.Errorf("should not fail, %s", err)
 	}
 
-	td.CmpDeeply(t, client.Actions, []MockAction{})
+	td.CmpEmpty(t, client.Actions)
+	td.Cmp(t, client.TunnelConf.Ingress, []cloudflare.UnvalidatedIngressRule{
+		{
+			Hostname: "bar.foo.com",
+			Service:  "https://2.3.4.5:443",
+		},
+		{
+			Hostname:      "foobar.bar.com",
+			Service:       "https://2.3.4.5:443",
+			OriginRequest: defaultOriginRequest,
+		},
+		{
+			Hostname: "",
+			Service:  "http_404",
+		},
+	})
 }
 
 func TestCustomTTLWithEnabledProxyNotChanged(t *testing.T) {
