@@ -69,6 +69,15 @@ var ExampleDomain = []cloudflare.DNSRecord{
 		Proxied: proxyEnabled,
 	},
 	{
+		ID:      "2345678901",
+		ZoneID:  "001",
+		Name:    "fooo.bar.com",
+		Type:    endpoint.RecordTypeCNAME,
+		TTL:     1,
+		Content: tunnelTarget,
+		Proxied: proxyEnabled,
+	},
+	{
 		ID:      "1231231233",
 		ZoneID:  "002",
 		Name:    "bar.foo.com",
@@ -82,12 +91,19 @@ var ExampleDomain = []cloudflare.DNSRecord{
 var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 	Ingress: []cloudflare.UnvalidatedIngressRule{
 		{
-			Hostname: "foobar.bar.com",
-			Service:  "https://1.2.3.4:443",
+			Hostname:      "foobar.bar.com",
+			Service:       toHttps("1.2.3.4"),
+			OriginRequest: defaultOriginRequest,
 		},
 		{
-			Hostname: "bar.foo.com",
-			Service:  "https://2.3.4.5:443",
+			Hostname:      "fooo.bar.com",
+			Service:       toHttps("3.4.5.6"),
+			OriginRequest: defaultOriginRequest,
+		},
+		{
+			Hostname:      "bar.foo.com",
+			Service:       "https://2.3.4.5:443",
+			OriginRequest: defaultOriginRequest,
 		},
 		catchAll,
 	},
@@ -1290,6 +1306,13 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
 			Labels:     endpoint.Labels{},
 		},
+		{
+			DNSName:    "foo.bar.com",
+			Targets:    endpoint.Targets{"1.2.3.4"},
+			RecordType: endpoint.RecordTypeA,
+			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+			Labels:     endpoint.Labels{},
+		},
 	})
 	assert.NoError(t, err)
 	plan := &plan.Plan{
@@ -1307,11 +1330,34 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 		t.Errorf("should not fail, %s", err)
 	}
 
-	td.CmpEmpty(t, client.Actions)
+	td.Cmp(t, client.Actions, []MockAction{
+		{
+			Name:   "Create",
+			ZoneId: "001",
+			RecordData: cloudflare.DNSRecord{
+				Name:    "foo.bar.com",
+				Content: tunnelTarget,
+				Type:    "CNAME",
+				TTL:     1,
+				Proxied: proxyEnabled,
+			},
+		},
+		{
+			Name:     "Delete",
+			ZoneId:   "001",
+			RecordId: "2345678901",
+		},
+	})
 	td.Cmp(t, client.TunnelConf.Ingress, []cloudflare.UnvalidatedIngressRule{
 		{
-			Hostname: "bar.foo.com",
-			Service:  "https://2.3.4.5:443",
+			Hostname:      "bar.foo.com",
+			Service:       "https://2.3.4.5:443",
+			OriginRequest: defaultOriginRequest,
+		},
+		{
+			Hostname:      "foo.bar.com",
+			Service:       toHttps("1.2.3.4"),
+			OriginRequest: defaultOriginRequest,
 		},
 		{
 			Hostname:      "foobar.bar.com",
