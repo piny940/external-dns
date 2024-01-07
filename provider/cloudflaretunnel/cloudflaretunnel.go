@@ -38,8 +38,6 @@ const (
 	cloudFlareCreate = "CREATE"
 	// cloudFlareDelete is a ChangeAction enum value
 	cloudFlareDelete = "DELETE"
-	// cloudFlareUpdate is a ChangeAction enum value
-	cloudFlareUpdate = "UPDATE"
 	// defaultCloudFlareRecordTTL 1 = automatic
 	defaultCloudFlareRecordTTL = 1
 )
@@ -77,7 +75,7 @@ type cloudFlareDNS interface {
 	ListDNSRecords(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.ListDNSRecordsParams) ([]cloudflare.DNSRecord, *cloudflare.ResultInfo, error)
 	CreateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.CreateDNSRecordParams) (cloudflare.DNSRecord, error)
 	DeleteDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, recordID string) error
-	UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error
+	// UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error
 	GetTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, tunnelID string) (cloudflare.TunnelConfigurationResult, error)
 	UpdateTunnelConfiguration(ctx context.Context, rc *cloudflare.ResourceContainer, cp cloudflare.TunnelConfigurationParams) (cloudflare.TunnelConfigurationResult, error)
 }
@@ -106,10 +104,10 @@ func (z service) ListDNSRecords(ctx context.Context, rc *cloudflare.ResourceCont
 	return z.service.ListDNSRecords(ctx, rc, rp)
 }
 
-func (z service) UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error {
-	_, err := z.service.UpdateDNSRecord(ctx, rc, rp)
-	return err
-}
+// func (z service) UpdateDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, rp cloudflare.UpdateDNSRecordParams) error {
+// 	_, err := z.service.UpdateDNSRecord(ctx, rc, rp)
+// 	return err
+// }
 
 func (z service) DeleteDNSRecord(ctx context.Context, rc *cloudflare.ResourceContainer, recordID string) error {
 	return z.service.DeleteDNSRecord(ctx, rc, recordID)
@@ -300,6 +298,7 @@ func (p *CloudFlareProvider) Records(ctx context.Context) ([]*endpoint.Endpoint,
 		}
 		targets[ingress.Hostname] = target
 	}
+	// If recordType is CNAME and target is tunnelTarget, treat it as A record
 	for _, endpoint := range endpoints {
 		if endpoint.RecordType != recordTypeCNAME {
 			continue
@@ -397,27 +396,16 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			}
 
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
-			if change.Action == cloudFlareUpdate {
+			if change.Action == cloudFlareDelete {
 				if change.ResourceRecord.Type == "A" {
-					log.Info("skipping: update record type is A")
-					continue
-				}
-				recordID := p.getRecordID(records, change.ResourceRecord)
-				if recordID == "" {
-					log.WithFields(logFields).Errorf("failed to find previous record: %v", change.ResourceRecord)
-					continue
-				}
-				recordParam := getUpdateDNSRecordParam(*change)
-				recordParam.ID = recordID
-				err := p.Client.UpdateDNSRecord(ctx, resourceContainer, recordParam)
-				if err != nil {
-					failedChange = true
-					log.WithFields(logFields).Errorf("failed to update record: %v", err)
-				}
-			} else if change.Action == cloudFlareDelete {
-				if change.ResourceRecord.Type == "A" {
-					log.Info("skipping: delete record type is A")
-					continue
+					change = p.cnameChange(*change)
+					ingressIdx, err := p.ingressIndexOf(ingresses, newIngress(*change))
+					if err != nil {
+						log.WithFields(logFields).Errorf("failed to find tunnel ingress: %v", err)
+						continue
+					}
+					// delete ingress
+					ingresses = append(ingresses[:ingressIdx], ingresses[ingressIdx+1:]...)
 				}
 				recordID := p.getRecordID(records, change.ResourceRecord)
 				if recordID == "" {
@@ -546,6 +534,15 @@ func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
 			NoTLSVerify: boolPtr(true),
 		},
 	}
+}
+
+func (p *CloudFlareProvider) ingressIndexOf(ingresses []cloudflare.UnvalidatedIngressRule, ingress cloudflare.UnvalidatedIngressRule) (int, error) {
+	for i, item := range ingresses {
+		if item.Hostname == ingress.Hostname && item.Service == ingress.Service {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("ingress not found. ingresses: %v, ingress: %v", ingresses, ingress)
 }
 
 func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareChange {
