@@ -374,31 +374,20 @@ func TestCloudflareA(t *testing.T) {
 		{
 			RecordType: "A",
 			DNSName:    "bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1", "127.0.0.2"},
+			Targets:    endpoint.Targets{"127.0.0.1"},
 		},
 	}
 
-	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
+	AssertActions(t, &CloudFlareProvider{TunnelID: tunnelID}, endpoints, []MockAction{
 		{
 			Name:   "Create",
 			ZoneId: "001",
 			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
+				Type:    "CNAME",
 				Name:    "bar.com",
-				Content: "127.0.0.1",
+				Content: tunnelTarget,
 				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "bar.com",
-				Content: "127.0.0.2",
-				TTL:     1,
-				Proxied: proxyDisabled,
+				Proxied: proxyEnabled,
 			},
 		},
 	},
