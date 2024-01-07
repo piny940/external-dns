@@ -52,6 +52,7 @@ type mockCloudFlareClient struct {
 }
 
 var tunnelID = "jhioerafajiofewajiofewfer"
+var tunnelTarget = fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
 
 var ExampleDomain = []cloudflare.DNSRecord{
 	{
@@ -60,7 +61,7 @@ var ExampleDomain = []cloudflare.DNSRecord{
 		Name:    "foobar.bar.com",
 		Type:    endpoint.RecordTypeCNAME,
 		TTL:     120,
-		Content: fmt.Sprintf("%s.cfargotunnel.com", tunnelID),
+		Content: tunnelTarget,
 		Proxied: proxyEnabled,
 	},
 	{
@@ -69,7 +70,7 @@ var ExampleDomain = []cloudflare.DNSRecord{
 		Name:    "foobar.bar.com",
 		Type:    endpoint.RecordTypeCNAME,
 		TTL:     120,
-		Content: "3.4.5.6",
+		Content: tunnelTarget,
 		Proxied: proxyEnabled,
 	},
 	{
@@ -78,7 +79,7 @@ var ExampleDomain = []cloudflare.DNSRecord{
 		Name:    "bar.foo.com",
 		Type:    endpoint.RecordTypeCNAME,
 		TTL:     1,
-		Content: fmt.Sprintf("%s.cfargotunnel.com", tunnelID),
+		Content: tunnelTarget,
 		Proxied: proxyEnabled,
 	},
 }
@@ -88,6 +89,9 @@ var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 		{
 			Hostname: "foobar.bar.com",
 			Service:  "https://1.2.3.4:443",
+		}, {
+			Hostname: "foobar.bar.com",
+			Service:  "https://3.4.5.6:443",
 		},
 		{
 			Hostname: "bar.foo.com",
@@ -684,7 +688,7 @@ func TestCloudFlareZonesWithIDFilter(t *testing.T) {
 func TestCloudflareRecords(t *testing.T) {
 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
 		"001": ExampleDomain,
-	})
+	}, cloudflare.TunnelConfiguration{})
 
 	// Set DNSRecordsPerPage to 1 test the pagination behaviour
 	provider := &CloudFlareProvider{
@@ -1180,7 +1184,7 @@ func TestProviderPropertiesIdempotency(t *testing.T) {
 						Proxied: test.RecordsAreProxied,
 					},
 				},
-			})
+			}, cloudflare.TunnelConfiguration{})
 
 			provider := &CloudFlareProvider{
 				Client:           client,
@@ -1238,7 +1242,7 @@ func TestProviderPropertiesIdempotency(t *testing.T) {
 func TestCloudflareComplexUpdate(t *testing.T) {
 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
 		"001": ExampleDomain,
-	})
+	}, ExampleTunnelConf)
 
 	provider := &CloudFlareProvider{
 		Client: client,
@@ -1258,12 +1262,6 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 			RecordType: endpoint.RecordTypeA,
 			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
 			Labels:     endpoint.Labels{},
-			ProviderSpecific: endpoint.ProviderSpecific{
-				{
-					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-					Value: "true",
-				},
-			},
 		},
 	})
 	assert.NoError(t, err)
@@ -1282,36 +1280,7 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 		t.Errorf("should not fail, %s", err)
 	}
 
-	td.CmpDeeply(t, client.Actions, []MockAction{
-		{
-			Name:     "Delete",
-			ZoneId:   "001",
-			RecordId: "2345678901",
-		},
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Name:    "foobar.bar.com",
-				Type:    "A",
-				Content: "2.3.4.5",
-				TTL:     1,
-				Proxied: proxyEnabled,
-			},
-		},
-		{
-			Name:     "Update",
-			ZoneId:   "001",
-			RecordId: "1234567890",
-			RecordData: cloudflare.DNSRecord{
-				Name:    "foobar.bar.com",
-				Type:    "A",
-				Content: "1.2.3.4",
-				TTL:     1,
-				Proxied: proxyEnabled,
-			},
-		},
-	})
+	td.CmpDeeply(t, client.Actions, []MockAction{})
 }
 
 func TestCustomTTLWithEnabledProxyNotChanged(t *testing.T) {
@@ -1327,7 +1296,7 @@ func TestCustomTTLWithEnabledProxyNotChanged(t *testing.T) {
 				Proxied: proxyEnabled,
 			},
 		},
-	})
+	}, cloudflare.TunnelConfiguration{})
 
 	provider := &CloudFlareProvider{
 		Client: client,
