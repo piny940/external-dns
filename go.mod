@@ -53,7 +53,6 @@ require (
 	github.com/prometheus/client_golang v1.18.0
 	github.com/scaleway/scaleway-sdk-go v1.0.0-beta.22
 	github.com/sirupsen/logrus v1.9.3
-	github.com/slack-go/slack v0.12.3
 	github.com/stretchr/testify v1.8.4
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.834
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod v1.0.834
@@ -129,7 +128,6 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
-	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
