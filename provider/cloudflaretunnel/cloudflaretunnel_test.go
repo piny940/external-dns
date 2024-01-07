@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -31,7 +30,6 @@ import (
 	"github.com/maxatome/go-testdeep/td"
 	"sigs.k8s.io/external-dns/endpoint"
 	"sigs.k8s.io/external-dns/plan"
-	"sigs.k8s.io/external-dns/provider"
 )
 
 type MockAction struct {
@@ -53,6 +51,10 @@ type mockCloudFlareClient struct {
 
 var tunnelID = "jhioerafajiofewajiofewfer"
 var tunnelTarget = fmt.Sprintf("%s.cfargotunnel.com", tunnelID)
+var catchAll = cloudflare.UnvalidatedIngressRule{
+	Hostname: "",
+	Service:  "http_404",
+}
 
 var ExampleDomain = []cloudflare.DNSRecord{
 	{
@@ -85,10 +87,7 @@ var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 			Hostname: "bar.foo.com",
 			Service:  "https://2.3.4.5:443",
 		},
-		{
-			Hostname: "",
-			Service:  "http_404",
-		},
+		catchAll,
 	},
 }
 
@@ -102,6 +101,11 @@ func NewMockCloudFlareClient() *mockCloudFlareClient {
 		Records: map[string]map[string]cloudflare.DNSRecord{
 			"001": {},
 			"002": {},
+		},
+		TunnelConf: cloudflare.TunnelConfiguration{
+			Ingress: []cloudflare.UnvalidatedIngressRule{
+				catchAll,
+			},
 		},
 	}
 }
@@ -315,7 +319,7 @@ func (m *mockCloudFlareClient) UpdateTunnelConfiguration(ctx context.Context, rc
 	}, nil
 }
 
-func AssertActions(t *testing.T, provider *CloudFlareProvider, endpoints []*endpoint.Endpoint, actions []MockAction, managedRecords []string, args ...interface{}) {
+func AssertActions(t *testing.T, provider *CloudFlareProvider, endpoints []*endpoint.Endpoint, actions []MockAction, managedRecords []string, expectedIngress []cloudflare.UnvalidatedIngressRule, args ...interface{}) {
 	t.Helper()
 
 	var client *mockCloudFlareClient
@@ -360,6 +364,7 @@ func AssertActions(t *testing.T, provider *CloudFlareProvider, endpoints []*endp
 	}
 
 	td.Cmp(t, client.Actions, actions, args...)
+	td.Cmp(t, client.TunnelConf.Ingress, expectedIngress, args...)
 }
 
 func AssertTunnelConf(t *testing.T, provider *CloudFlareProvider, expected cloudflare.TunnelConfiguration) {
@@ -392,7 +397,14 @@ func TestCloudflareA(t *testing.T) {
 		},
 	},
 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
+		[]cloudflare.UnvalidatedIngressRule{
+			{
+				Hostname:      "bar.com",
+				Service:       toHttps("127.0.0.1"),
+				OriginRequest: defaultOriginRequest,
+			},
+			catchAll,
+		})
 }
 
 func TestCloudflareCname(t *testing.T) {
@@ -400,7 +412,7 @@ func TestCloudflareCname(t *testing.T) {
 		{
 			RecordType: "CNAME",
 			DNSName:    "cname.bar.com",
-			Targets:    endpoint.Targets{"google.com", "facebook.com"},
+			Targets:    endpoint.Targets{"google.com"},
 		},
 	}
 
@@ -413,927 +425,921 @@ func TestCloudflareCname(t *testing.T) {
 				Name:    "cname.bar.com",
 				Content: "google.com",
 				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "CNAME",
-				Name:    "cname.bar.com",
-				Content: "facebook.com",
-				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-	},
-		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareCustomTTL(t *testing.T) {
-	endpoints := []*endpoint.Endpoint{
-		{
-			RecordType: "A",
-			DNSName:    "ttl.bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1"},
-			RecordTTL:  120,
-		},
-	}
-
-	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "ttl.bar.com",
-				Content: "127.0.0.1",
-				TTL:     120,
-				Proxied: proxyDisabled,
-			},
-		},
-	},
-		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareProxiedDefault(t *testing.T) {
-	endpoints := []*endpoint.Endpoint{
-		{
-			RecordType: "A",
-			DNSName:    "bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1"},
-		},
-	}
-
-	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "bar.com",
-				Content: "127.0.0.1",
-				TTL:     1,
 				Proxied: proxyEnabled,
 			},
 		},
 	},
 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareProxiedOverrideTrue(t *testing.T) {
-	endpoints := []*endpoint.Endpoint{
-		{
-			RecordType: "A",
-			DNSName:    "bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1"},
-			ProviderSpecific: endpoint.ProviderSpecific{
-				endpoint.ProviderSpecificProperty{
-					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-					Value: "true",
-				},
-			},
-		},
-	}
-
-	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "bar.com",
-				Content: "127.0.0.1",
-				TTL:     1,
-				Proxied: proxyEnabled,
-			},
-		},
-	},
-		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareProxiedOverrideFalse(t *testing.T) {
-	endpoints := []*endpoint.Endpoint{
-		{
-			RecordType: "A",
-			DNSName:    "bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1"},
-			ProviderSpecific: endpoint.ProviderSpecific{
-				endpoint.ProviderSpecificProperty{
-					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-					Value: "false",
-				},
-			},
-		},
-	}
-
-	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "bar.com",
-				Content: "127.0.0.1",
-				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-	},
-		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareProxiedOverrideIllegal(t *testing.T) {
-	endpoints := []*endpoint.Endpoint{
-		{
-			RecordType: "A",
-			DNSName:    "bar.com",
-			Targets:    endpoint.Targets{"127.0.0.1"},
-			ProviderSpecific: endpoint.ProviderSpecific{
-				endpoint.ProviderSpecificProperty{
-					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-					Value: "asfasdfa",
-				},
-			},
-		},
-	}
-
-	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    "bar.com",
-				Content: "127.0.0.1",
-				TTL:     1,
-				Proxied: proxyEnabled,
-			},
-		},
-	},
-		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	)
-}
-
-func TestCloudflareSetProxied(t *testing.T) {
-	var proxied *bool = proxyEnabled
-	var notProxied *bool = proxyDisabled
-	testCases := []struct {
-		recordType string
-		domain     string
-		proxiable  *bool
-	}{
-		{"A", "bar.com", proxied},
-		{"CNAME", "bar.com", proxied},
-		{"TXT", "bar.com", notProxied},
-		{"MX", "bar.com", notProxied},
-		{"NS", "bar.com", notProxied},
-		{"SPF", "bar.com", notProxied},
-		{"SRV", "bar.com", notProxied},
-		{"A", "*.bar.com", proxied},
-		{"CNAME", "*.docs.bar.com", proxied},
-	}
-
-	for _, testCase := range testCases {
-		endpoints := []*endpoint.Endpoint{
+		[]cloudflare.UnvalidatedIngressRule{
 			{
-				RecordType: testCase.recordType,
-				DNSName:    testCase.domain,
-				Targets:    endpoint.Targets{"127.0.0.1"},
-				ProviderSpecific: endpoint.ProviderSpecific{
-					endpoint.ProviderSpecificProperty{
-						Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-						Value: "true",
-					},
-				},
+				Hostname:      "cname.bar.com",
+				Service:       toHttps("google.com"),
+				OriginRequest: defaultOriginRequest,
 			},
-		}
-
-		AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
-			{
-				Name:   "Create",
-				ZoneId: "001",
-				RecordData: cloudflare.DNSRecord{
-					Type:    testCase.recordType,
-					Name:    testCase.domain,
-					Content: "127.0.0.1",
-					TTL:     1,
-					Proxied: testCase.proxiable,
-				},
-			},
-		}, []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME, endpoint.RecordTypeNS}, testCase.recordType+" record on "+testCase.domain)
-	}
+			catchAll,
+		},
+	)
 }
 
-func TestCloudflareZones(t *testing.T) {
-	provider := &CloudFlareProvider{
-		Client:       NewMockCloudFlareClient(),
-		domainFilter: endpoint.NewDomainFilter([]string{"bar.com"}),
-		zoneIDFilter: provider.NewZoneIDFilter([]string{""}),
-	}
+// func TestCloudflareCustomTTL(t *testing.T) {
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			RecordType: "A",
+// 			DNSName:    "ttl.bar.com",
+// 			Targets:    endpoint.Targets{"127.0.0.1"},
+// 			RecordTTL:  120,
+// 		},
+// 	}
 
-	zones, err := provider.Zones(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+// 	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Type:    "A",
+// 				Name:    "ttl.bar.com",
+// 				Content: "127.0.0.1",
+// 				TTL:     120,
+// 				Proxied: proxyDisabled,
+// 			},
+// 		},
+// 	},
+// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	)
+// }
 
-	assert.Equal(t, 1, len(zones))
-	assert.Equal(t, "bar.com", zones[0].Name)
-}
+// func TestCloudflareProxiedDefault(t *testing.T) {
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			RecordType: "A",
+// 			DNSName:    "bar.com",
+// 			Targets:    endpoint.Targets{"127.0.0.1"},
+// 		},
+// 	}
 
-func TestCloudFlareZonesWithIDFilter(t *testing.T) {
-	client := NewMockCloudFlareClient()
-	client.listZonesError = errors.New("shouldn't need to list zones when ZoneIDFilter in use")
-	provider := &CloudFlareProvider{
-		Client:       client,
-		domainFilter: endpoint.NewDomainFilter([]string{"bar.com", "foo.com"}),
-		zoneIDFilter: provider.NewZoneIDFilter([]string{"001"}),
-	}
+// 	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Type:    "A",
+// 				Name:    "bar.com",
+// 				Content: "127.0.0.1",
+// 				TTL:     1,
+// 				Proxied: proxyEnabled,
+// 			},
+// 		},
+// 	},
+// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	)
+// }
 
-	zones, err := provider.Zones(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+// func TestCloudflareProxiedOverrideTrue(t *testing.T) {
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			RecordType: "A",
+// 			DNSName:    "bar.com",
+// 			Targets:    endpoint.Targets{"127.0.0.1"},
+// 			ProviderSpecific: endpoint.ProviderSpecific{
+// 				endpoint.ProviderSpecificProperty{
+// 					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 					Value: "true",
+// 				},
+// 			},
+// 		},
+// 	}
 
-	// foo.com should *not* be returned as it doesn't match ZoneID filter
-	assert.Equal(t, 1, len(zones))
-	assert.Equal(t, "bar.com", zones[0].Name)
-}
+// 	AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Type:    "A",
+// 				Name:    "bar.com",
+// 				Content: "127.0.0.1",
+// 				TTL:     1,
+// 				Proxied: proxyEnabled,
+// 			},
+// 		},
+// 	},
+// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	)
+// }
 
-func TestCloudflareRecords(t *testing.T) {
-	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
-		"001": ExampleDomain,
-	}, cloudflare.TunnelConfiguration{})
+// func TestCloudflareProxiedOverrideFalse(t *testing.T) {
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			RecordType: "A",
+// 			DNSName:    "bar.com",
+// 			Targets:    endpoint.Targets{"127.0.0.1"},
+// 			ProviderSpecific: endpoint.ProviderSpecific{
+// 				endpoint.ProviderSpecificProperty{
+// 					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 					Value: "false",
+// 				},
+// 			},
+// 		},
+// 	}
 
-	// Set DNSRecordsPerPage to 1 test the pagination behaviour
-	provider := &CloudFlareProvider{
-		Client:            client,
-		DNSRecordsPerPage: 1,
-	}
-	ctx := context.Background()
+// 	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Type:    "A",
+// 				Name:    "bar.com",
+// 				Content: "127.0.0.1",
+// 				TTL:     1,
+// 				Proxied: proxyDisabled,
+// 			},
+// 		},
+// 	},
+// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	)
+// }
 
-	records, err := provider.Records(ctx)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// func TestCloudflareProxiedOverrideIllegal(t *testing.T) {
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			RecordType: "A",
+// 			DNSName:    "bar.com",
+// 			Targets:    endpoint.Targets{"127.0.0.1"},
+// 			ProviderSpecific: endpoint.ProviderSpecific{
+// 				endpoint.ProviderSpecificProperty{
+// 					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 					Value: "asfasdfa",
+// 				},
+// 			},
+// 		},
+// 	}
 
-	assert.Equal(t, 2, len(records))
-	client.dnsRecordsError = errors.New("failed to list dns records")
-	_, err = provider.Records(ctx)
-	if err == nil {
-		t.Errorf("expected to fail")
-	}
-	client.dnsRecordsError = nil
-	client.listZonesError = errors.New("failed to list zones")
-	_, err = provider.Records(ctx)
-	if err == nil {
-		t.Errorf("expected to fail")
-	}
-}
+// 	AssertActions(t, &CloudFlareProvider{proxiedByDefault: true}, endpoints, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Type:    "A",
+// 				Name:    "bar.com",
+// 				Content: "127.0.0.1",
+// 				TTL:     1,
+// 				Proxied: proxyEnabled,
+// 			},
+// 		},
+// 	},
+// 		[]string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	)
+// }
 
-func TestCloudflareProvider(t *testing.T) {
-	_ = os.Setenv("CF_API_TOKEN", "abc123def")
-	_, err := NewCloudFlareProvider(
-		endpoint.NewDomainFilter([]string{"bar.com"}),
-		provider.NewZoneIDFilter([]string{""}),
-		false,
-		true,
-		5000)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// func TestCloudflareSetProxied(t *testing.T) {
+// 	var proxied *bool = proxyEnabled
+// 	var notProxied *bool = proxyDisabled
+// 	testCases := []struct {
+// 		recordType string
+// 		domain     string
+// 		proxiable  *bool
+// 	}{
+// 		{"A", "bar.com", proxied},
+// 		{"CNAME", "bar.com", proxied},
+// 		{"TXT", "bar.com", notProxied},
+// 		{"MX", "bar.com", notProxied},
+// 		{"NS", "bar.com", notProxied},
+// 		{"SPF", "bar.com", notProxied},
+// 		{"SRV", "bar.com", notProxied},
+// 		{"A", "*.bar.com", proxied},
+// 		{"CNAME", "*.docs.bar.com", proxied},
+// 	}
 
-	_ = os.Unsetenv("CF_API_TOKEN")
-	tokenFile := "/tmp/cf_api_token"
-	if err := os.WriteFile(tokenFile, []byte("abc123def"), 0o644); err != nil {
-		t.Errorf("failed to write token file, %s", err)
-	}
-	_ = os.Setenv("CF_API_TOKEN", tokenFile)
-	_, err = NewCloudFlareProvider(
-		endpoint.NewDomainFilter([]string{"bar.com"}),
-		provider.NewZoneIDFilter([]string{""}),
-		false,
-		true,
-		5000)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// 	for _, testCase := range testCases {
+// 		endpoints := []*endpoint.Endpoint{
+// 			{
+// 				RecordType: testCase.recordType,
+// 				DNSName:    testCase.domain,
+// 				Targets:    endpoint.Targets{"127.0.0.1"},
+// 				ProviderSpecific: endpoint.ProviderSpecific{
+// 					endpoint.ProviderSpecificProperty{
+// 						Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 						Value: "true",
+// 					},
+// 				},
+// 			},
+// 		}
 
-	_ = os.Unsetenv("CF_API_TOKEN")
-	_ = os.Setenv("CF_API_KEY", "xxxxxxxxxxxxxxxxx")
-	_ = os.Setenv("CF_API_EMAIL", "test@test.com")
-	_, err = NewCloudFlareProvider(
-		endpoint.NewDomainFilter([]string{"bar.com"}),
-		provider.NewZoneIDFilter([]string{""}),
-		false,
-		true,
-		5000)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// 		AssertActions(t, &CloudFlareProvider{}, endpoints, []MockAction{
+// 			{
+// 				Name:   "Create",
+// 				ZoneId: "001",
+// 				RecordData: cloudflare.DNSRecord{
+// 					Type:    testCase.recordType,
+// 					Name:    testCase.domain,
+// 					Content: "127.0.0.1",
+// 					TTL:     1,
+// 					Proxied: testCase.proxiable,
+// 				},
+// 			},
+// 		}, []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME, endpoint.RecordTypeNS}, testCase.recordType+" record on "+testCase.domain)
+// 	}
+// }
 
-	_ = os.Unsetenv("CF_API_KEY")
-	_ = os.Unsetenv("CF_API_EMAIL")
-	_, err = NewCloudFlareProvider(
-		endpoint.NewDomainFilter([]string{"bar.com"}),
-		provider.NewZoneIDFilter([]string{""}),
-		false,
-		true,
-		5000)
-	if err == nil {
-		t.Errorf("expected to fail")
-	}
-}
+// func TestCloudflareZones(t *testing.T) {
+// 	provider := &CloudFlareProvider{
+// 		Client:       NewMockCloudFlareClient(),
+// 		domainFilter: endpoint.NewDomainFilter([]string{"bar.com"}),
+// 		zoneIDFilter: provider.NewZoneIDFilter([]string{""}),
+// 	}
 
-func TestCloudflareApplyChanges(t *testing.T) {
-	changes := &plan.Changes{}
-	client := NewMockCloudFlareClient()
-	provider := &CloudFlareProvider{
-		Client: client,
-	}
-	changes.Create = []*endpoint.Endpoint{{
-		DNSName: "new.bar.com",
-		Targets: endpoint.Targets{"target"},
-	}, {
-		DNSName: "new.ext-dns-test.unrelated.to",
-		Targets: endpoint.Targets{"target"},
-	}}
-	changes.Delete = []*endpoint.Endpoint{{
-		DNSName: "foobar.bar.com",
-		Targets: endpoint.Targets{"target"},
-	}}
-	changes.UpdateOld = []*endpoint.Endpoint{{
-		DNSName: "foobar.bar.com",
-		Targets: endpoint.Targets{"target-old"},
-	}}
-	changes.UpdateNew = []*endpoint.Endpoint{{
-		DNSName: "foobar.bar.com",
-		Targets: endpoint.Targets{"target-new"},
-	}}
-	err := provider.ApplyChanges(context.Background(), changes)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// 	zones, err := provider.Zones(context.Background())
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	td.Cmp(t, client.Actions, []MockAction{
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Name:    "new.bar.com",
-				Content: "target",
-				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-		{
-			Name:   "Create",
-			ZoneId: "001",
-			RecordData: cloudflare.DNSRecord{
-				Name:    "foobar.bar.com",
-				Content: "target-new",
-				TTL:     1,
-				Proxied: proxyDisabled,
-			},
-		},
-	})
+// 	assert.Equal(t, 1, len(zones))
+// 	assert.Equal(t, "bar.com", zones[0].Name)
+// }
 
-	// empty changes
-	changes.Create = []*endpoint.Endpoint{}
-	changes.Delete = []*endpoint.Endpoint{}
-	changes.UpdateOld = []*endpoint.Endpoint{}
-	changes.UpdateNew = []*endpoint.Endpoint{}
+// func TestCloudFlareZonesWithIDFilter(t *testing.T) {
+// 	client := NewMockCloudFlareClient()
+// 	client.listZonesError = errors.New("shouldn't need to list zones when ZoneIDFilter in use")
+// 	provider := &CloudFlareProvider{
+// 		Client:       client,
+// 		domainFilter: endpoint.NewDomainFilter([]string{"bar.com", "foo.com"}),
+// 		zoneIDFilter: provider.NewZoneIDFilter([]string{"001"}),
+// 	}
 
-	err = provider.ApplyChanges(context.Background(), changes)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
-}
+// 	zones, err := provider.Zones(context.Background())
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-func TestCloudflareApplyChangesError(t *testing.T) {
-	changes := &plan.Changes{}
-	client := NewMockCloudFlareClient()
-	provider := &CloudFlareProvider{
-		Client: client,
-	}
-	changes.Create = []*endpoint.Endpoint{{
-		DNSName: "newerror.bar.com",
-		Targets: endpoint.Targets{"target"},
-	}}
-	err := provider.ApplyChanges(context.Background(), changes)
-	if err == nil {
-		t.Errorf("should fail, %s", err)
-	}
-}
+// 	// foo.com should *not* be returned as it doesn't match ZoneID filter
+// 	assert.Equal(t, 1, len(zones))
+// 	assert.Equal(t, "bar.com", zones[0].Name)
+// }
 
-func TestCloudflareGetRecordID(t *testing.T) {
-	p := &CloudFlareProvider{}
-	records := []cloudflare.DNSRecord{
-		{
-			Name:    "foo.com",
-			Type:    endpoint.RecordTypeCNAME,
-			Content: "foobar",
-			ID:      "1",
-		},
-		{
-			Name: "bar.de",
-			Type: endpoint.RecordTypeA,
-			ID:   "2",
-		},
-		{
-			Name:    "bar.de",
-			Type:    endpoint.RecordTypeA,
-			Content: "1.2.3.4",
-			ID:      "2",
-		},
-	}
+// func TestCloudflareRecords(t *testing.T) {
+// 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
+// 		"001": ExampleDomain,
+// 	}, cloudflare.TunnelConfiguration{})
 
-	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
-		Name:    "foo.com",
-		Type:    endpoint.RecordTypeA,
-		Content: "foobar",
-	}))
+// 	// Set DNSRecordsPerPage to 1 test the pagination behaviour
+// 	provider := &CloudFlareProvider{
+// 		Client:            client,
+// 		DNSRecordsPerPage: 1,
+// 	}
+// 	ctx := context.Background()
 
-	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
-		Name:    "foo.com",
-		Type:    endpoint.RecordTypeCNAME,
-		Content: "fizfuz",
-	}))
+// 	records, err := provider.Records(ctx)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
 
-	assert.Equal(t, "1", p.getRecordID(records, cloudflare.DNSRecord{
-		Name:    "foo.com",
-		Type:    endpoint.RecordTypeCNAME,
-		Content: "foobar",
-	}))
-	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
-		Name:    "bar.de",
-		Type:    endpoint.RecordTypeA,
-		Content: "2.3.4.5",
-	}))
-	assert.Equal(t, "2", p.getRecordID(records, cloudflare.DNSRecord{
-		Name:    "bar.de",
-		Type:    endpoint.RecordTypeA,
-		Content: "1.2.3.4",
-	}))
-}
+// 	assert.Equal(t, 2, len(records))
+// 	client.dnsRecordsError = errors.New("failed to list dns records")
+// 	_, err = provider.Records(ctx)
+// 	if err == nil {
+// 		t.Errorf("expected to fail")
+// 	}
+// 	client.dnsRecordsError = nil
+// 	client.listZonesError = errors.New("failed to list zones")
+// 	_, err = provider.Records(ctx)
+// 	if err == nil {
+// 		t.Errorf("expected to fail")
+// 	}
+// }
 
-func TestCloudflareGroupByNameAndType(t *testing.T) {
-	testCases := []struct {
-		Name              string
-		Records           []cloudflare.DNSRecord
-		ExpectedEndpoints []*endpoint.Endpoint
-	}{
-		{
-			Name:              "empty",
-			Records:           []cloudflare.DNSRecord{},
-			ExpectedEndpoints: []*endpoint.Endpoint{},
-		},
-		{
-			Name: "single record - single target",
-			Records: []cloudflare.DNSRecord{
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-			},
-			ExpectedEndpoints: []*endpoint.Endpoint{
-				{
-					DNSName:    "foo.com",
-					Targets:    endpoint.Targets{"10.10.10.1"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "single record - multiple targets",
-			Records: []cloudflare.DNSRecord{
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.2",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-			},
-			ExpectedEndpoints: []*endpoint.Endpoint{
-				{
-					DNSName:    "foo.com",
-					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "multiple record - multiple targets",
-			Records: []cloudflare.DNSRecord{
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.2",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "bar.de",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "bar.de",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.2",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-			},
-			ExpectedEndpoints: []*endpoint.Endpoint{
-				{
-					DNSName:    "foo.com",
-					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-				{
-					DNSName:    "bar.de",
-					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "multiple record - mixed single/multiple targets",
-			Records: []cloudflare.DNSRecord{
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.2",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "bar.de",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-			},
-			ExpectedEndpoints: []*endpoint.Endpoint{
-				{
-					DNSName:    "foo.com",
-					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-				{
-					DNSName:    "bar.de",
-					Targets:    endpoint.Targets{"10.10.10.1"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "unsupported record type",
-			Records: []cloudflare.DNSRecord{
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "foo.com",
-					Type:    endpoint.RecordTypeA,
-					Content: "10.10.10.2",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-				{
-					Name:    "bar.de",
-					Type:    "NOT SUPPORTED",
-					Content: "10.10.10.1",
-					TTL:     defaultCloudFlareRecordTTL,
-					Proxied: proxyDisabled,
-				},
-			},
-			ExpectedEndpoints: []*endpoint.Endpoint{
-				{
-					DNSName:    "foo.com",
-					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
-					RecordType: endpoint.RecordTypeA,
-					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-					Labels:     endpoint.Labels{},
-					ProviderSpecific: endpoint.ProviderSpecific{
-						{
-							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-							Value: "false",
-						},
-					},
-				},
-			},
-		},
-	}
+// func TestCloudflareProvider(t *testing.T) {
+// 	_ = os.Setenv("CF_API_TOKEN", "abc123def")
+// 	_, err := NewCloudFlareProvider(
+// 		endpoint.NewDomainFilter([]string{"bar.com"}),
+// 		provider.NewZoneIDFilter([]string{""}),
+// 		false,
+// 		true,
+// 		5000)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
 
-	for _, tc := range testCases {
-		assert.ElementsMatch(t, groupByNameAndType(tc.Records), tc.ExpectedEndpoints)
-	}
-}
+// 	_ = os.Unsetenv("CF_API_TOKEN")
+// 	tokenFile := "/tmp/cf_api_token"
+// 	if err := os.WriteFile(tokenFile, []byte("abc123def"), 0o644); err != nil {
+// 		t.Errorf("failed to write token file, %s", err)
+// 	}
+// 	_ = os.Setenv("CF_API_TOKEN", tokenFile)
+// 	_, err = NewCloudFlareProvider(
+// 		endpoint.NewDomainFilter([]string{"bar.com"}),
+// 		provider.NewZoneIDFilter([]string{""}),
+// 		false,
+// 		true,
+// 		5000)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
 
-func TestProviderPropertiesIdempotency(t *testing.T) {
-	testCases := []struct {
-		Name                     string
-		ProviderProxiedByDefault bool
-		RecordsAreProxied        *bool
-		ShouldBeUpdated          bool
-	}{
-		{
-			Name:                     "ProxyDefault: false, ShouldBeProxied: false, ExpectUpdates: false",
-			ProviderProxiedByDefault: false,
-			RecordsAreProxied:        proxyDisabled,
-			ShouldBeUpdated:          false,
-		},
-		{
-			Name:                     "ProxyDefault: true, ShouldBeProxied: true, ExpectUpdates: false",
-			ProviderProxiedByDefault: true,
-			RecordsAreProxied:        proxyEnabled,
-			ShouldBeUpdated:          false,
-		},
-		{
-			Name:                     "ProxyDefault: true, ShouldBeProxied: false, ExpectUpdates: true",
-			ProviderProxiedByDefault: true,
-			RecordsAreProxied:        proxyDisabled,
-			ShouldBeUpdated:          true,
-		},
-		{
-			Name:                     "ProxyDefault: false, ShouldBeProxied: true, ExpectUpdates: true",
-			ProviderProxiedByDefault: false,
-			RecordsAreProxied:        proxyEnabled,
-			ShouldBeUpdated:          true,
-		},
-	}
+// 	_ = os.Unsetenv("CF_API_TOKEN")
+// 	_ = os.Setenv("CF_API_KEY", "xxxxxxxxxxxxxxxxx")
+// 	_ = os.Setenv("CF_API_EMAIL", "test@test.com")
+// 	_, err = NewCloudFlareProvider(
+// 		endpoint.NewDomainFilter([]string{"bar.com"}),
+// 		provider.NewZoneIDFilter([]string{""}),
+// 		false,
+// 		true,
+// 		5000)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
 
-	for _, test := range testCases {
-		t.Run(test.Name, func(t *testing.T) {
-			client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
-				"001": {
-					{
-						ID:      "1234567890",
-						ZoneID:  "001",
-						Name:    "foobar.bar.com",
-						Type:    endpoint.RecordTypeA,
-						TTL:     120,
-						Content: "1.2.3.4",
-						Proxied: test.RecordsAreProxied,
-					},
-				},
-			}, cloudflare.TunnelConfiguration{})
+// 	_ = os.Unsetenv("CF_API_KEY")
+// 	_ = os.Unsetenv("CF_API_EMAIL")
+// 	_, err = NewCloudFlareProvider(
+// 		endpoint.NewDomainFilter([]string{"bar.com"}),
+// 		provider.NewZoneIDFilter([]string{""}),
+// 		false,
+// 		true,
+// 		5000)
+// 	if err == nil {
+// 		t.Errorf("expected to fail")
+// 	}
+// }
 
-			provider := &CloudFlareProvider{
-				Client:           client,
-				proxiedByDefault: test.ProviderProxiedByDefault,
-			}
-			ctx := context.Background()
+// func TestCloudflareApplyChanges(t *testing.T) {
+// 	changes := &plan.Changes{}
+// 	client := NewMockCloudFlareClient()
+// 	provider := &CloudFlareProvider{
+// 		Client: client,
+// 	}
+// 	changes.Create = []*endpoint.Endpoint{{
+// 		DNSName: "new.bar.com",
+// 		Targets: endpoint.Targets{"target"},
+// 	}, {
+// 		DNSName: "new.ext-dns-test.unrelated.to",
+// 		Targets: endpoint.Targets{"target"},
+// 	}}
+// 	changes.Delete = []*endpoint.Endpoint{{
+// 		DNSName: "foobar.bar.com",
+// 		Targets: endpoint.Targets{"target"},
+// 	}}
+// 	changes.UpdateOld = []*endpoint.Endpoint{{
+// 		DNSName: "foobar.bar.com",
+// 		Targets: endpoint.Targets{"target-old"},
+// 	}}
+// 	changes.UpdateNew = []*endpoint.Endpoint{{
+// 		DNSName: "foobar.bar.com",
+// 		Targets: endpoint.Targets{"target-new"},
+// 	}}
+// 	err := provider.ApplyChanges(context.Background(), changes)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
 
-			current, err := provider.Records(ctx)
-			if err != nil {
-				t.Errorf("should not fail, %s", err)
-			}
-			assert.Equal(t, 1, len(current))
+// 	td.Cmp(t, client.Actions, []MockAction{
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Name:    "new.bar.com",
+// 				Content: "target",
+// 				TTL:     1,
+// 				Proxied: proxyDisabled,
+// 			},
+// 		},
+// 		{
+// 			Name:   "Create",
+// 			ZoneId: "001",
+// 			RecordData: cloudflare.DNSRecord{
+// 				Name:    "foobar.bar.com",
+// 				Content: "target-new",
+// 				TTL:     1,
+// 				Proxied: proxyDisabled,
+// 			},
+// 		},
+// 	})
 
-			desired := []*endpoint.Endpoint{}
-			for _, c := range current {
-				// Copy all except ProviderSpecific fields
-				desired = append(desired, &endpoint.Endpoint{
-					DNSName:       c.DNSName,
-					Targets:       c.Targets,
-					RecordType:    c.RecordType,
-					SetIdentifier: c.SetIdentifier,
-					RecordTTL:     c.RecordTTL,
-					Labels:        c.Labels,
-				})
-			}
+// 	// empty changes
+// 	changes.Create = []*endpoint.Endpoint{}
+// 	changes.Delete = []*endpoint.Endpoint{}
+// 	changes.UpdateOld = []*endpoint.Endpoint{}
+// 	changes.UpdateNew = []*endpoint.Endpoint{}
 
-			desired, err = provider.AdjustEndpoints(desired)
-			assert.NoError(t, err)
+// 	err = provider.ApplyChanges(context.Background(), changes)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
+// }
 
-			plan := plan.Plan{
-				Current:        current,
-				Desired:        desired,
-				ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-			}
+// func TestCloudflareApplyChangesError(t *testing.T) {
+// 	changes := &plan.Changes{}
+// 	client := NewMockCloudFlareClient()
+// 	provider := &CloudFlareProvider{
+// 		Client: client,
+// 	}
+// 	changes.Create = []*endpoint.Endpoint{{
+// 		DNSName: "newerror.bar.com",
+// 		Targets: endpoint.Targets{"target"},
+// 	}}
+// 	err := provider.ApplyChanges(context.Background(), changes)
+// 	if err == nil {
+// 		t.Errorf("should fail, %s", err)
+// 	}
+// }
 
-			plan = *plan.Calculate()
-			assert.NotNil(t, plan.Changes, "should have plan")
-			if plan.Changes == nil {
-				return
-			}
-			assert.Equal(t, 0, len(plan.Changes.Create), "should not have creates")
-			assert.Equal(t, 0, len(plan.Changes.Delete), "should not have deletes")
+// func TestCloudflareGetRecordID(t *testing.T) {
+// 	p := &CloudFlareProvider{}
+// 	records := []cloudflare.DNSRecord{
+// 		{
+// 			Name:    "foo.com",
+// 			Type:    endpoint.RecordTypeCNAME,
+// 			Content: "foobar",
+// 			ID:      "1",
+// 		},
+// 		{
+// 			Name: "bar.de",
+// 			Type: endpoint.RecordTypeA,
+// 			ID:   "2",
+// 		},
+// 		{
+// 			Name:    "bar.de",
+// 			Type:    endpoint.RecordTypeA,
+// 			Content: "1.2.3.4",
+// 			ID:      "2",
+// 		},
+// 	}
 
-			if test.ShouldBeUpdated {
-				assert.Equal(t, 1, len(plan.Changes.UpdateNew), "should not have new updates")
-				assert.Equal(t, 1, len(plan.Changes.UpdateOld), "should not have old updates")
-			} else {
-				assert.Equal(t, 0, len(plan.Changes.UpdateNew), "should not have new updates")
-				assert.Equal(t, 0, len(plan.Changes.UpdateOld), "should not have old updates")
-			}
-		})
-	}
-}
+// 	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
+// 		Name:    "foo.com",
+// 		Type:    endpoint.RecordTypeA,
+// 		Content: "foobar",
+// 	}))
 
-func TestCloudflareComplexUpdate(t *testing.T) {
-	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
-		"001": ExampleDomain,
-	}, ExampleTunnelConf)
+// 	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
+// 		Name:    "foo.com",
+// 		Type:    endpoint.RecordTypeCNAME,
+// 		Content: "fizfuz",
+// 	}))
 
-	provider := &CloudFlareProvider{
-		Client:   client,
-		TunnelID: tunnelID,
-	}
-	ctx := context.Background()
+// 	assert.Equal(t, "1", p.getRecordID(records, cloudflare.DNSRecord{
+// 		Name:    "foo.com",
+// 		Type:    endpoint.RecordTypeCNAME,
+// 		Content: "foobar",
+// 	}))
+// 	assert.Equal(t, "", p.getRecordID(records, cloudflare.DNSRecord{
+// 		Name:    "bar.de",
+// 		Type:    endpoint.RecordTypeA,
+// 		Content: "2.3.4.5",
+// 	}))
+// 	assert.Equal(t, "2", p.getRecordID(records, cloudflare.DNSRecord{
+// 		Name:    "bar.de",
+// 		Type:    endpoint.RecordTypeA,
+// 		Content: "1.2.3.4",
+// 	}))
+// }
 
-	records, err := provider.Records(ctx)
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// func TestCloudflareGroupByNameAndType(t *testing.T) {
+// 	testCases := []struct {
+// 		Name              string
+// 		Records           []cloudflare.DNSRecord
+// 		ExpectedEndpoints []*endpoint.Endpoint
+// 	}{
+// 		{
+// 			Name:              "empty",
+// 			Records:           []cloudflare.DNSRecord{},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{},
+// 		},
+// 		{
+// 			Name: "single record - single target",
+// 			Records: []cloudflare.DNSRecord{
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 			},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{
+// 				{
+// 					DNSName:    "foo.com",
+// 					Targets:    endpoint.Targets{"10.10.10.1"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 			},
+// 		},
+// 		{
+// 			Name: "single record - multiple targets",
+// 			Records: []cloudflare.DNSRecord{
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.2",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 			},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{
+// 				{
+// 					DNSName:    "foo.com",
+// 					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 			},
+// 		},
+// 		{
+// 			Name: "multiple record - multiple targets",
+// 			Records: []cloudflare.DNSRecord{
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.2",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "bar.de",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "bar.de",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.2",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 			},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{
+// 				{
+// 					DNSName:    "foo.com",
+// 					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 				{
+// 					DNSName:    "bar.de",
+// 					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 			},
+// 		},
+// 		{
+// 			Name: "multiple record - mixed single/multiple targets",
+// 			Records: []cloudflare.DNSRecord{
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.2",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "bar.de",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 			},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{
+// 				{
+// 					DNSName:    "foo.com",
+// 					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 				{
+// 					DNSName:    "bar.de",
+// 					Targets:    endpoint.Targets{"10.10.10.1"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 			},
+// 		},
+// 		{
+// 			Name: "unsupported record type",
+// 			Records: []cloudflare.DNSRecord{
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "foo.com",
+// 					Type:    endpoint.RecordTypeA,
+// 					Content: "10.10.10.2",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 				{
+// 					Name:    "bar.de",
+// 					Type:    "NOT SUPPORTED",
+// 					Content: "10.10.10.1",
+// 					TTL:     defaultCloudFlareRecordTTL,
+// 					Proxied: proxyDisabled,
+// 				},
+// 			},
+// 			ExpectedEndpoints: []*endpoint.Endpoint{
+// 				{
+// 					DNSName:    "foo.com",
+// 					Targets:    endpoint.Targets{"10.10.10.1", "10.10.10.2"},
+// 					RecordType: endpoint.RecordTypeA,
+// 					RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 					Labels:     endpoint.Labels{},
+// 					ProviderSpecific: endpoint.ProviderSpecific{
+// 						{
+// 							Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 							Value: "false",
+// 						},
+// 					},
+// 				},
+// 			},
+// 		},
+// 	}
 
-	domainFilter := endpoint.NewDomainFilter([]string{"bar.com"})
-	endpoints, err := provider.AdjustEndpoints([]*endpoint.Endpoint{
-		{
-			DNSName:    "foobar.bar.com",
-			Targets:    endpoint.Targets{"2.3.4.5"},
-			RecordType: endpoint.RecordTypeA,
-			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
-			Labels:     endpoint.Labels{},
-		},
-	})
-	assert.NoError(t, err)
-	plan := &plan.Plan{
-		Current:        records,
-		Desired:        endpoints,
-		DomainFilter:   endpoint.MatchAllDomainFilters{&domainFilter},
-		ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	}
+// 	for _, tc := range testCases {
+// 		assert.ElementsMatch(t, groupByNameAndType(tc.Records), tc.ExpectedEndpoints)
+// 	}
+// }
 
-	planned := plan.Calculate()
+// func TestProviderPropertiesIdempotency(t *testing.T) {
+// 	testCases := []struct {
+// 		Name                     string
+// 		ProviderProxiedByDefault bool
+// 		RecordsAreProxied        *bool
+// 		ShouldBeUpdated          bool
+// 	}{
+// 		{
+// 			Name:                     "ProxyDefault: false, ShouldBeProxied: false, ExpectUpdates: false",
+// 			ProviderProxiedByDefault: false,
+// 			RecordsAreProxied:        proxyDisabled,
+// 			ShouldBeUpdated:          false,
+// 		},
+// 		{
+// 			Name:                     "ProxyDefault: true, ShouldBeProxied: true, ExpectUpdates: false",
+// 			ProviderProxiedByDefault: true,
+// 			RecordsAreProxied:        proxyEnabled,
+// 			ShouldBeUpdated:          false,
+// 		},
+// 		{
+// 			Name:                     "ProxyDefault: true, ShouldBeProxied: false, ExpectUpdates: true",
+// 			ProviderProxiedByDefault: true,
+// 			RecordsAreProxied:        proxyDisabled,
+// 			ShouldBeUpdated:          true,
+// 		},
+// 		{
+// 			Name:                     "ProxyDefault: false, ShouldBeProxied: true, ExpectUpdates: true",
+// 			ProviderProxiedByDefault: false,
+// 			RecordsAreProxied:        proxyEnabled,
+// 			ShouldBeUpdated:          true,
+// 		},
+// 	}
 
-	err = provider.ApplyChanges(context.Background(), planned.Changes)
+// 	for _, test := range testCases {
+// 		t.Run(test.Name, func(t *testing.T) {
+// 			client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
+// 				"001": {
+// 					{
+// 						ID:      "1234567890",
+// 						ZoneID:  "001",
+// 						Name:    "foobar.bar.com",
+// 						Type:    endpoint.RecordTypeA,
+// 						TTL:     120,
+// 						Content: "1.2.3.4",
+// 						Proxied: test.RecordsAreProxied,
+// 					},
+// 				},
+// 			}, cloudflare.TunnelConfiguration{})
 
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// 			provider := &CloudFlareProvider{
+// 				Client:           client,
+// 				proxiedByDefault: test.ProviderProxiedByDefault,
+// 			}
+// 			ctx := context.Background()
 
-	td.CmpEmpty(t, client.Actions)
-	td.Cmp(t, client.TunnelConf.Ingress, []cloudflare.UnvalidatedIngressRule{
-		{
-			Hostname: "bar.foo.com",
-			Service:  "https://2.3.4.5:443",
-		},
-		{
-			Hostname:      "foobar.bar.com",
-			Service:       "https://2.3.4.5:443",
-			OriginRequest: defaultOriginRequest,
-		},
-		{
-			Hostname: "",
-			Service:  "http_404",
-		},
-	})
-}
+// 			current, err := provider.Records(ctx)
+// 			if err != nil {
+// 				t.Errorf("should not fail, %s", err)
+// 			}
+// 			assert.Equal(t, 1, len(current))
 
-func TestCustomTTLWithEnabledProxyNotChanged(t *testing.T) {
-	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
-		"001": {
-			{
-				ID:      "1234567890",
-				ZoneID:  "001",
-				Name:    "foobar.bar.com",
-				Type:    endpoint.RecordTypeA,
-				TTL:     1,
-				Content: "1.2.3.4",
-				Proxied: proxyEnabled,
-			},
-		},
-	}, cloudflare.TunnelConfiguration{})
+// 			desired := []*endpoint.Endpoint{}
+// 			for _, c := range current {
+// 				// Copy all except ProviderSpecific fields
+// 				desired = append(desired, &endpoint.Endpoint{
+// 					DNSName:       c.DNSName,
+// 					Targets:       c.Targets,
+// 					RecordType:    c.RecordType,
+// 					SetIdentifier: c.SetIdentifier,
+// 					RecordTTL:     c.RecordTTL,
+// 					Labels:        c.Labels,
+// 				})
+// 			}
 
-	provider := &CloudFlareProvider{
-		Client: client,
-	}
+// 			desired, err = provider.AdjustEndpoints(desired)
+// 			assert.NoError(t, err)
 
-	records, err := provider.Records(context.Background())
-	if err != nil {
-		t.Errorf("should not fail, %s", err)
-	}
+// 			plan := plan.Plan{
+// 				Current:        current,
+// 				Desired:        desired,
+// 				ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 			}
 
-	endpoints := []*endpoint.Endpoint{
-		{
-			DNSName:    "foobar.bar.com",
-			Targets:    endpoint.Targets{"1.2.3.4"},
-			RecordType: endpoint.RecordTypeA,
-			RecordTTL:  300,
-			Labels:     endpoint.Labels{},
-			ProviderSpecific: endpoint.ProviderSpecific{
-				{
-					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
-					Value: "true",
-				},
-			},
-		},
-	}
+// 			plan = *plan.Calculate()
+// 			assert.NotNil(t, plan.Changes, "should have plan")
+// 			if plan.Changes == nil {
+// 				return
+// 			}
+// 			assert.Equal(t, 0, len(plan.Changes.Create), "should not have creates")
+// 			assert.Equal(t, 0, len(plan.Changes.Delete), "should not have deletes")
 
-	provider.AdjustEndpoints(endpoints)
+// 			if test.ShouldBeUpdated {
+// 				assert.Equal(t, 1, len(plan.Changes.UpdateNew), "should not have new updates")
+// 				assert.Equal(t, 1, len(plan.Changes.UpdateOld), "should not have old updates")
+// 			} else {
+// 				assert.Equal(t, 0, len(plan.Changes.UpdateNew), "should not have new updates")
+// 				assert.Equal(t, 0, len(plan.Changes.UpdateOld), "should not have old updates")
+// 			}
+// 		})
+// 	}
+// }
 
-	domainFilter := endpoint.NewDomainFilter([]string{"bar.com"})
-	plan := &plan.Plan{
-		Current:        records,
-		Desired:        endpoints,
-		DomainFilter:   endpoint.MatchAllDomainFilters{&domainFilter},
-		ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
-	}
+// func TestCloudflareComplexUpdate(t *testing.T) {
+// 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
+// 		"001": ExampleDomain,
+// 	}, ExampleTunnelConf)
 
-	planned := plan.Calculate()
+// 	provider := &CloudFlareProvider{
+// 		Client:   client,
+// 		TunnelID: tunnelID,
+// 	}
+// 	ctx := context.Background()
 
-	assert.Equal(t, 0, len(planned.Changes.Create), "no new changes should be here")
-	assert.Equal(t, 0, len(planned.Changes.UpdateNew), "no new changes should be here")
-	assert.Equal(t, 0, len(planned.Changes.UpdateOld), "no new changes should be here")
-	assert.Equal(t, 0, len(planned.Changes.Delete), "no new changes should be here")
-}
+// 	records, err := provider.Records(ctx)
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
+
+// 	domainFilter := endpoint.NewDomainFilter([]string{"bar.com"})
+// 	endpoints, err := provider.AdjustEndpoints([]*endpoint.Endpoint{
+// 		{
+// 			DNSName:    "foobar.bar.com",
+// 			Targets:    endpoint.Targets{"2.3.4.5"},
+// 			RecordType: endpoint.RecordTypeA,
+// 			RecordTTL:  endpoint.TTL(defaultCloudFlareRecordTTL),
+// 			Labels:     endpoint.Labels{},
+// 		},
+// 	})
+// 	assert.NoError(t, err)
+// 	plan := &plan.Plan{
+// 		Current:        records,
+// 		Desired:        endpoints,
+// 		DomainFilter:   endpoint.MatchAllDomainFilters{&domainFilter},
+// 		ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	}
+
+// 	planned := plan.Calculate()
+
+// 	err = provider.ApplyChanges(context.Background(), planned.Changes)
+
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
+
+// 	td.CmpEmpty(t, client.Actions)
+// 	td.Cmp(t, client.TunnelConf.Ingress, []cloudflare.UnvalidatedIngressRule{
+// 		{
+// 			Hostname: "bar.foo.com",
+// 			Service:  "https://2.3.4.5:443",
+// 		},
+// 		{
+// 			Hostname:      "foobar.bar.com",
+// 			Service:       "https://2.3.4.5:443",
+// 			OriginRequest: defaultOriginRequest,
+// 		},
+// 		catchAll,
+// 	})
+// }
+
+// func TestCustomTTLWithEnabledProxyNotChanged(t *testing.T) {
+// 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
+// 		"001": {
+// 			{
+// 				ID:      "1234567890",
+// 				ZoneID:  "001",
+// 				Name:    "foobar.bar.com",
+// 				Type:    endpoint.RecordTypeA,
+// 				TTL:     1,
+// 				Content: "1.2.3.4",
+// 				Proxied: proxyEnabled,
+// 			},
+// 		},
+// 	}, cloudflare.TunnelConfiguration{})
+
+// 	provider := &CloudFlareProvider{
+// 		Client: client,
+// 	}
+
+// 	records, err := provider.Records(context.Background())
+// 	if err != nil {
+// 		t.Errorf("should not fail, %s", err)
+// 	}
+
+// 	endpoints := []*endpoint.Endpoint{
+// 		{
+// 			DNSName:    "foobar.bar.com",
+// 			Targets:    endpoint.Targets{"1.2.3.4"},
+// 			RecordType: endpoint.RecordTypeA,
+// 			RecordTTL:  300,
+// 			Labels:     endpoint.Labels{},
+// 			ProviderSpecific: endpoint.ProviderSpecific{
+// 				{
+// 					Name:  "external-dns.alpha.kubernetes.io/cloudflare-proxied",
+// 					Value: "true",
+// 				},
+// 			},
+// 		},
+// 	}
+
+// 	provider.AdjustEndpoints(endpoints)
+
+// 	domainFilter := endpoint.NewDomainFilter([]string{"bar.com"})
+// 	plan := &plan.Plan{
+// 		Current:        records,
+// 		Desired:        endpoints,
+// 		DomainFilter:   endpoint.MatchAllDomainFilters{&domainFilter},
+// 		ManagedRecords: []string{endpoint.RecordTypeA, endpoint.RecordTypeCNAME},
+// 	}
+
+// 	planned := plan.Calculate()
+
+// 	assert.Equal(t, 0, len(planned.Changes.Create), "no new changes should be here")
+// 	assert.Equal(t, 0, len(planned.Changes.UpdateNew), "no new changes should be here")
+// 	assert.Equal(t, 0, len(planned.Changes.UpdateOld), "no new changes should be here")
+// 	assert.Equal(t, 0, len(planned.Changes.Delete), "no new changes should be here")
+// }

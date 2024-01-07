@@ -560,7 +560,7 @@ func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
 	return cloudflare.UnvalidatedIngressRule{
 		Hostname:      change.ResourceRecord.Name,
 		Path:          "",
-		Service:       fmt.Sprintf("https://%s:443", change.ResourceRecord.Content),
+		Service:       toHttps(change.ResourceRecord.Content),
 		OriginRequest: defaultOriginRequest,
 	}
 }
@@ -686,6 +686,10 @@ func shouldBeProxied(endpoint *endpoint.Endpoint, proxiedByDefault bool) bool {
 		proxied = false
 	}
 	return proxied
+}
+
+func toHttps(address string) string {
+	return fmt.Sprintf("https://%s:443", address)
 }
 
 func groupByNameAndType(records []cloudflare.DNSRecord) []*endpoint.Endpoint {
