@@ -331,7 +331,7 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 		current := changes.UpdateOld[i]
 
 		log.Infof("check difference. current targets: %v, desired targets: %v", current.Targets, desired.Targets)
-		add, remove, leave := provider.Difference(current.Targets, desired.Targets)
+		add, remove, _ := provider.Difference(current.Targets, desired.Targets)
 
 		for _, a := range remove {
 			cloudflareChanges = append(cloudflareChanges, p.newCloudFlareChange(cloudFlareDelete, current, a))
@@ -339,10 +339,6 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 
 		for _, a := range add {
 			cloudflareChanges = append(cloudflareChanges, p.newCloudFlareChange(cloudFlareCreate, desired, a))
-		}
-
-		for _, a := range leave {
-			cloudflareChanges = append(cloudflareChanges, p.newCloudFlareChange(cloudFlareUpdate, desired, a))
 		}
 	}
 
