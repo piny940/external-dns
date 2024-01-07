@@ -29,4 +29,4 @@ jobs:
 
       - name: Lint
         run: |
-          if (diff -u <(echo -n) <(gofmt -d ./)); then exit 1; fi
+          if (diff -u <(echo -n) <(gofmt -d ./)) | grep diff; then exit 1; fi
