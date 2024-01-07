@@ -574,19 +574,6 @@ func (p *CloudFlareProvider) indexOfIngress(ingresses []cloudflare.UnvalidatedIn
 	return 0, fmt.Errorf("ingress not found. ingresses: %+v, ingress: %+v", ingresses, ingress)
 }
 
-func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareChange {
-	return &cloudFlareChange{
-		Action: change.Action,
-		ResourceRecord: cloudflare.DNSRecord{
-			Name:    change.ResourceRecord.Name,
-			TTL:     change.ResourceRecord.TTL,
-			Proxied: proxyEnabled,
-			Type:    endpoint.RecordTypeCNAME,
-			Content: p.tunnelTarget(),
-		},
-	}
-}
-
 func (p *CloudFlareProvider) tunnelTarget() string {
 	return fmt.Sprintf("%s.cfargotunnel.com", p.TunnelID)
 }
