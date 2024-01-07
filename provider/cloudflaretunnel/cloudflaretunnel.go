@@ -428,7 +428,7 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 		TunnelID: p.TunnelID,
 		Config:   newConf,
 	}
-	log.Infof("start change tunnel configuration. before: %v, after: %v", oldConf.Config.Ingress, newConf.Ingress)
+	log.Infof("start change tunnel configuration. before: %+v, after: %+v", oldConf.Config.Ingress, newConf.Ingress)
 	_, err = p.Client.UpdateTunnelConfiguration(ctx, accountResourceContainer, confParam)
 	if err != nil {
 		log.Errorf("failed to update tunnel configuration: %v", err)
@@ -554,7 +554,7 @@ func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
 	return cloudflare.UnvalidatedIngressRule{
 		Hostname: change.ResourceRecord.Name,
 		Path:     "",
-		Service:  fmt.Sprintf("https://%v:443", change.ResourceRecord.Content),
+		Service:  fmt.Sprintf("https://%s:443", change.ResourceRecord.Content),
 		OriginRequest: &cloudflare.OriginRequestConfig{
 			Http2Origin: boolPtr(true),
 			NoTLSVerify: boolPtr(true),
@@ -568,7 +568,7 @@ func (p *CloudFlareProvider) indexOfIngress(ingresses []cloudflare.UnvalidatedIn
 			return i, nil
 		}
 	}
-	return 0, fmt.Errorf("ingress not found. ingresses: %v, ingress: %v", ingresses, ingress)
+	return 0, fmt.Errorf("ingress not found. ingresses: %+v, ingress: %+v", ingresses, ingress)
 }
 
 func (p *CloudFlareProvider) cnameChange(change cloudFlareChange) *cloudFlareChange {
