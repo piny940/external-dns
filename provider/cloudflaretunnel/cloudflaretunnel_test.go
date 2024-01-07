@@ -728,12 +728,13 @@ func TestCloudFlareZonesWithIDFilter(t *testing.T) {
 func TestCloudflareRecords(t *testing.T) {
 	client := NewMockCloudFlareClientWithRecords(map[string][]cloudflare.DNSRecord{
 		"001": ExampleDomain,
-	}, cloudflare.TunnelConfiguration{})
+	}, ExampleTunnelConf)
 
 	// Set DNSRecordsPerPage to 1 test the pagination behaviour
 	provider := &CloudFlareProvider{
 		Client:            client,
 		DNSRecordsPerPage: 1,
+		TunnelID:          tunnelID,
 	}
 	ctx := context.Background()
 
@@ -742,7 +743,7 @@ func TestCloudflareRecords(t *testing.T) {
 		t.Errorf("should not fail, %s", err)
 	}
 
-	assert.Equal(t, 2, len(records))
+	assert.Equal(t, 3, len(records))
 	client.dnsRecordsError = errors.New("failed to list dns records")
 	_, err = provider.Records(ctx)
 	if err == nil {
