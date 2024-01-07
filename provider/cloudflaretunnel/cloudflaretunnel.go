@@ -362,15 +362,6 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 	// separate into per-zone change sets to be passed to the API.
 	changesByZone := p.changesByZone(zones, changes)
 
-	accountResourceContainer := cloudflare.AccountIdentifier(p.AccountID)
-	oldConf, err := p.Client.GetTunnelConfiguration(ctx, accountResourceContainer, p.TunnelID)
-	if err != nil {
-		log.Errorf("failed to get tunnel configuration: %v", err)
-		return err
-	}
-	ingresses := make([]cloudflare.UnvalidatedIngressRule, len(oldConf.Config.Ingress))
-	copy(ingresses, oldConf.Config.Ingress)
-
 	var failedZones []string
 	for zoneID, changes := range changesByZone {
 		records, err := p.listDNSRecordsWithAutoPagination(ctx, zoneID)
@@ -395,20 +386,14 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 			}
 
 			resourceContainer := cloudflare.ZoneIdentifier(zoneID)
-			if change.Action == cloudFlareDelete {
-				if change.ResourceRecord.Type == "A" {
-					ingressIdx, err := p.ingressIndexOf(ingresses, newIngress(*change))
-					if err != nil {
-						log.WithFields(logFields).Errorf("failed to find tunnel ingress: %v", err)
-						continue
-					}
-					// delete ingress
-					ingresses = append(ingresses[:ingressIdx], ingresses[ingressIdx+1:]...)
-					change = p.cnameChange(*change)
-				}
-				recordID := p.getRecordID(records, change.ResourceRecord)
+			aConfiguredChange := *change
+			if change.ResourceRecord.Type == "A" {
+				aConfiguredChange = *p.cnameChange(*change)
+			}
+			if aConfiguredChange.Action == cloudFlareDelete {
+				recordID := p.getRecordID(records, aConfiguredChange.ResourceRecord)
 				if recordID == "" {
-					log.WithFields(logFields).Errorf("failed to find previous record: %v", change.ResourceRecord)
+					log.WithFields(logFields).Errorf("failed to find previous record: %v", aConfiguredChange.ResourceRecord)
 					continue
 				}
 				err := p.Client.DeleteDNSRecord(ctx, resourceContainer, recordID)
@@ -416,12 +401,8 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 					failedChange = true
 					log.WithFields(logFields).Errorf("failed to delete record: %v", err)
 				}
-			} else if change.Action == cloudFlareCreate {
-				if change.ResourceRecord.Type == "A" {
-					ingresses = append(ingresses, newIngress(*change))
-					change = p.cnameChange(*change)
-				}
-				recordParam := getCreateDNSRecordParam(*change)
+			} else if aConfiguredChange.Action == cloudFlareCreate {
+				recordParam := getCreateDNSRecordParam(aConfiguredChange)
 				_, err := p.Client.CreateDNSRecord(ctx, resourceContainer, recordParam)
 				if err != nil {
 					failedChange = true
@@ -439,15 +420,22 @@ func (p *CloudFlareProvider) submitChanges(ctx context.Context, changes []*cloud
 		return fmt.Errorf("failed to submit all changes for the following zones: %v", failedZones)
 	}
 
+	accountResourceContainer := cloudflare.AccountIdentifier(p.AccountID)
+	oldConf, err := p.Client.GetTunnelConfiguration(ctx, accountResourceContainer, p.TunnelID)
+	if err != nil {
+		log.Errorf("failed to get tunnel configuration: %v", err)
+		return err
+	}
+	newConf, err := p.updateTunnelConf(oldConf.Config, changes)
+	if err != nil {
+		return err
+	}
+
 	confParam := cloudflare.TunnelConfigurationParams{
 		TunnelID: p.TunnelID,
-		Config: cloudflare.TunnelConfiguration{
-			Ingress:       ingresses,
-			WarpRouting:   oldConf.Config.WarpRouting,
-			OriginRequest: oldConf.Config.OriginRequest,
-		},
+		Config:   newConf,
 	}
-	log.Infof("start change tunnel configuration. before: %v, after: %v", oldConf.Config.Ingress, ingresses)
+	log.Infof("start change tunnel configuration. before: %v, after: %v", oldConf.Config.Ingress, newConf.Ingress)
 	_, err = p.Client.UpdateTunnelConfiguration(ctx, accountResourceContainer, confParam)
 	if err != nil {
 		log.Errorf("failed to update tunnel configuration: %v", err)
@@ -492,6 +480,52 @@ func (p *CloudFlareProvider) changesByZone(zones []cloudflare.Zone, changeSet []
 	}
 
 	return changes
+}
+
+func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfiguration, changes []*cloudFlareChange) (cloudflare.TunnelConfiguration, error) {
+	oldTargets := make(map[string]string, 0)
+	for _, ingress := range oldConf.Ingress {
+		if ingress.Hostname == "" {
+			continue
+		}
+		target, err := p.extractTarget(ingress.Service)
+		if err != nil {
+			continue
+		}
+		oldTargets[ingress.Hostname] = target
+	}
+	ingresses := make([]cloudflare.UnvalidatedIngressRule, len(oldConf.Ingress))
+	var catchAll cloudflare.UnvalidatedIngressRule
+	for _, rule := range oldConf.Ingress {
+		if rule.Hostname == "" {
+			catchAll = rule
+			continue
+		}
+		ingresses = append(ingresses, rule)
+	}
+
+	for _, change := range changes {
+		if change.ResourceRecord.Type != endpoint.RecordTypeA {
+			continue
+		}
+		if change.Action == cloudFlareCreate {
+			ingresses = append(ingresses, newIngress(*change))
+		} else if change.Action == cloudFlareDelete {
+			changeWithContent := *change
+			changeWithContent.ResourceRecord.Content = oldTargets[change.ResourceRecord.Name]
+			ingressIdx, err := p.ingressIndexOf(ingresses, newIngress(changeWithContent))
+			if err != nil {
+				log.Errorf("failed to find tunnel ingress: %v", err)
+				return oldConf, err
+			}
+			ingresses = append(ingresses[:ingressIdx], ingresses[ingressIdx+1:]...)
+		}
+	}
+
+	ingresses = append(ingresses, catchAll)
+	newConf := oldConf
+	newConf.Ingress = ingresses
+	return newConf, nil
 }
 
 func (p *CloudFlareProvider) getRecordID(records []cloudflare.DNSRecord, record cloudflare.DNSRecord) string {
