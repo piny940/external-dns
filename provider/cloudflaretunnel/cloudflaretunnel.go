@@ -329,7 +329,6 @@ func (p *CloudFlareProvider) ApplyChanges(ctx context.Context, changes *plan.Cha
 	for i, desired := range changes.UpdateNew {
 		current := changes.UpdateOld[i]
 
-		log.Infof("check difference. current targets: %v, desired targets: %v", current.Targets, desired.Targets)
 		add, remove, _ := provider.Difference(current.Targets, desired.Targets)
 
 		for _, a := range remove {
