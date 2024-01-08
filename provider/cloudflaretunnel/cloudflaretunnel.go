@@ -527,6 +527,49 @@ func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfigura
 	return newConf, nil
 }
 
+func (p *CloudFlareProvider) filteredChanges(changes []*cloudFlareChange, currentRecords []cloudflare.DNSRecord, newIngress []cloudflare.UnvalidatedIngressRule) []*cloudFlareChange {
+	filteredChanges := make([]*cloudFlareChange, 0)
+	tunnelCreations := make([]string, 0)
+	tunnelDeletions := make([]string, 0)
+	for _, change := range changes {
+		if change.ResourceRecord.Type != endpoint.RecordTypeA {
+			filteredChanges = append(filteredChanges, change)
+			continue
+		}
+		if change.Action == cloudFlareCreate {
+			tunnelCreations = append(tunnelCreations, change.ResourceRecord.Name)
+		} else if change.Action == cloudFlareDelete {
+			tunnelDeletions = append(tunnelDeletions, change.ResourceRecord.Name)
+		}
+	}
+
+	add, remove, _ := provider.Difference(tunnelDeletions, tunnelCreations)
+	for _, dnsName := range add {
+		filteredChanges = append(filteredChanges, &cloudFlareChange{
+			Action: cloudFlareCreate,
+			ResourceRecord: cloudflare.DNSRecord{
+				Name:    dnsName,
+				TTL:     defaultCloudFlareRecordTTL,
+				Proxied: proxyEnabled,
+				Type:    endpoint.RecordTypeCNAME,
+				Content: p.tunnelTarget(),
+			},
+		})
+	}
+	for _, dnsName := range remove {
+		filteredChanges = append(filteredChanges, &cloudFlareChange{
+			Action: cloudFlareDelete,
+			ResourceRecord: cloudflare.DNSRecord{
+				Name:    dnsName,
+				Type:    endpoint.RecordTypeCNAME,
+				Content: p.tunnelTarget(),
+			},
+		})
+	}
+
+	return filteredChanges
+}
+
 func (p *CloudFlareProvider) getRecordID(records []cloudflare.DNSRecord, record cloudflare.DNSRecord) string {
 	for _, zoneRecord := range records {
 		if zoneRecord.Name == record.Name && zoneRecord.Type == record.Type && zoneRecord.Content == record.Content {
@@ -589,49 +632,6 @@ func (p *CloudFlareProvider) extractTarget(cfService string) (string, error) {
 		return "", fmt.Errorf("there is no match. regexp: %s, cfService: %s", pattern, cfService)
 	}
 	return match, nil
-}
-
-func (p *CloudFlareProvider) filteredChanges(changes []*cloudFlareChange, currentRecords []cloudflare.DNSRecord, newIngress []cloudflare.UnvalidatedIngressRule) []*cloudFlareChange {
-	filteredChanges := make([]*cloudFlareChange, 0)
-	tunnelCreations := make([]string, 0)
-	tunnelDeletions := make([]string, 0)
-	for _, change := range changes {
-		if change.ResourceRecord.Type != endpoint.RecordTypeA {
-			filteredChanges = append(filteredChanges, change)
-			continue
-		}
-		if change.Action == cloudFlareCreate {
-			tunnelCreations = append(tunnelCreations, change.ResourceRecord.Name)
-		} else if change.Action == cloudFlareDelete {
-			tunnelDeletions = append(tunnelDeletions, change.ResourceRecord.Name)
-		}
-	}
-
-	add, remove, _ := provider.Difference(tunnelDeletions, tunnelCreations)
-	for _, dnsName := range add {
-		filteredChanges = append(filteredChanges, &cloudFlareChange{
-			Action: cloudFlareCreate,
-			ResourceRecord: cloudflare.DNSRecord{
-				Name:    dnsName,
-				TTL:     defaultCloudFlareRecordTTL,
-				Proxied: proxyEnabled,
-				Type:    endpoint.RecordTypeCNAME,
-				Content: p.tunnelTarget(),
-			},
-		})
-	}
-	for _, dnsName := range remove {
-		filteredChanges = append(filteredChanges, &cloudFlareChange{
-			Action: cloudFlareDelete,
-			ResourceRecord: cloudflare.DNSRecord{
-				Name:    dnsName,
-				Type:    endpoint.RecordTypeCNAME,
-				Content: p.tunnelTarget(),
-			},
-		})
-	}
-
-	return filteredChanges
 }
 
 // listDNSRecords performs automatic pagination of results on requests to cloudflare.ListDNSRecords with custom per_page values
