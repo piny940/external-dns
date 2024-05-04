@@ -515,7 +515,7 @@ func (p *CloudFlareProvider) updateTunnelConf(oldConf cloudflare.TunnelConfigura
 			ingressIdx, err := p.indexOfIngress(ingresses, newIngress(changeWithContent))
 			if err != nil {
 				log.Errorf("failed to find tunnel ingress: %v", err)
-				return oldConf, err
+				continue
 			}
 			ingresses = append(ingresses[:ingressIdx], ingresses[ingressIdx+1:]...)
 		}
