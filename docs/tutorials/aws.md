@@ -63,7 +63,7 @@ export KUBECONFIG="$HOME/.kube/${EKS_CLUSTER_NAME}-${EKS_CLUSTER_REGION}.yaml"
 eksctl create cluster --name $EKS_CLUSTER_NAME --region $EKS_CLUSTER_REGION
 ```
 
-Feel free to use other provisioning tools or an existing cluster.  If [Terraform](https://www.terraform.io/) is used, [vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) and [eks](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) modules are recommended for standing up an EKS cluster.  Amazon has a workshop called [Amazon EKS Terraform Workshop](https://tf-eks-workshop.workshop.aws/) that may be useful for this process.
+Feel free to use other provisioning tools or an existing cluster.  If [Terraform](https://www.terraform.io/) is used, [vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) and [eks](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) modules are recommended for standing up an EKS cluster.  Amazon has a workshop called [Amazon EKS Terraform Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/afee4679-89af-408b-8108-44f5b1065cc7/) that may be useful for this process.
 
 ## Permissions to modify DNS zone
 
@@ -79,7 +79,7 @@ Additionally, throughout this tutorial, the example domain of `example.com` is u
 
 ### Node IAM Role
 
-In this method, you can attach a policy to the Node IAM Role.  This will allow nodes in the Kubernetes cluster to access Route53 zones, which allows ExternalDNS to update DNS records.  Given that this allows all containers to access Route53, not just ExternalDNS, running on the node with these privileges, this method is not recommended, and is only suitable for limited limited test environments.
+In this method, you can attach a policy to the Node IAM Role.  This will allow nodes in the Kubernetes cluster to access Route53 zones, which allows ExternalDNS to update DNS records.  Given that this allows all containers to access Route53, not just ExternalDNS, running on the node with these privileges, this method is not recommended, and is only suitable for limited test environments.
 
 If you are using eksctl to provision a new cluster, you add the policy at creation time with:
 
@@ -211,10 +211,12 @@ aws iam attach-user-policy --user-name "externaldns" --policy-arn $POLICY_ARN
 
 ```bash
 SECRET_ACCESS_KEY=$(aws iam create-access-key --user-name "externaldns")
-cat <<-EOF > /local/path/to/credentials
+ACCESS_KEY_ID=$(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.AccessKeyId')
+
+cat <<-EOF > credentials
 
 [default]
-aws_access_key_id = $(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.AccessKeyId')
+aws_access_key_id = $(echo $ACCESS_KEY_ID)
 aws_secret_access_key = $(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.SecretAccessKey')
 EOF
 ```
@@ -329,7 +331,7 @@ kubectl patch serviceaccount "external-dns" --namespace ${EXTERNALDNS_NS:-"defau
  "{\"metadata\": { \"annotations\": { \"eks.amazonaws.com/role-arn\": \"$ROLE_ARN\" }}}"
 ```
 
-If any part of this step is misconfigured, such as the role with incorrect namespace configured in the trust relationship, annotation pointing the the wrong role, etc., you will see errors like `WebIdentityErr: failed to retrieve credentials`. Check the configuration and make corrections.  
+If any part of this step is misconfigured, such as the role with incorrect namespace configured in the trust relationship, annotation pointing the the wrong role, etc., you will see errors like `WebIdentityErr: failed to retrieve credentials`. Check the configuration and make corrections.
 
 When the service account annotations are updated, then the current running pods will have to be terminated, so that new pod(s) with proper configuration (environment variables) will be created automatically.
 
@@ -390,6 +392,24 @@ kubectl get namespaces | grep -q $EXTERNALDNS_NS || \
   kubectl create namespace $EXTERNALDNS_NS
 ```
 
+## Using Helm (with OIDC)
+
+Create a values.yaml file to configure ExternalDNS:
+
+```shell
+provider:
+  name: aws
+env:
+  - name: AWS_DEFAULT_REGION
+    value: us-east-1 # change to region where EKS is installed
+```
+
+Finally, install the ExternalDNS chart with Helm using the configuration specified in your values.yaml file:
+
+```shell
+helm upgrade --install external-dns external-dns/external-dns --values values.yaml
+```
+
 ### Manifest (for clusters without RBAC enabled)
 
 Save the following below as `externaldns-no-rbac.yaml`.
@@ -414,7 +434,7 @@ spec:
     spec:
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          image: registry.k8s.io/external-dns/external-dns:v0.14.2
           args:
             - --source=service
             - --source=ingress
@@ -509,7 +529,7 @@ spec:
       serviceAccountName: external-dns
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          image: registry.k8s.io/external-dns/external-dns:v0.14.2
           args:
             - --source=service
             - --source=ingress
@@ -561,6 +581,15 @@ Annotations which are specific to AWS.
 ### target-hosted-zone
 
 `external-dns.alpha.kubernetes.io/aws-target-hosted-zone` can optionally be set to the ID of a Route53 hosted zone. This will force external-dns to use the specified hosted zone when creating an ALIAS target.
+
+### aws-zone-match-parent
+`aws-zone-match-parent` allows support subdomains within the same zone by using their parent domain, i.e --domain-filter=x.example.com would create a DNS entry for x.example.com (and subdomains thereof).
+
+```yaml
+## hosted zone domain: example.com
+--domain-filter=x.example.com,example.com
+--aws-zone-match-parent
+```
 
 ## Verify ExternalDNS works (Service example)
 
@@ -901,13 +930,17 @@ eksctl delete cluster --name $EKS_CLUSTER_NAME --region $EKS_CLUSTER_REGION
 Give ExternalDNS some time to clean up the DNS records for you. Then delete the hosted zone if you created one for the testing purpose.
 
 ```bash
-aws route53 delete-hosted-zone --id $NODE_ID # e.g /hostedzone/ZEWFWZ4R16P7IB
+aws route53 delete-hosted-zone --id $ZONE_ID # e.g /hostedzone/ZEWFWZ4R16P7IB
 ```
 
 If IAM user credentials were used, you can remove the user with:
 
 ```bash
 aws iam detach-user-policy --user-name "externaldns" --policy-arn $POLICY_ARN
+
+# If static credentials were used
+aws iam delete-access-key --user-name "externaldns" --access-key-id $ACCESS_KEY_ID
+
 aws iam delete-user --user-name "externaldns"
 ```
 
@@ -962,7 +995,7 @@ A simple way to implement randomised startup is with an init container:
     spec:
       initContainers:
       - name: init-jitter
-        image: registry.k8s.io/external-dns/external-dns:v0.14.0
+        image: registry.k8s.io/external-dns/external-dns:v0.14.2
         command:
         - /bin/sh
         - -c
@@ -982,3 +1015,19 @@ An effective starting point for EKS with an ingress controller might look like:
 --domain-filter=example.com
 --aws-zones-cache-duration=1h
 ```
+
+### Batch size options
+
+After external-dns generates all changes, it will perform a task to group those changes into batches. Each change will be validated against batch-change-size limits. If at least one of those parameters out of range - the change will be moved to a separate batch. If the change can't fit into any batch - *it will be skipped.*<br>
+There are 3 options to control batch size for AWS provider:
+* Maximum amount of changes added to one batch
+  * `--aws-batch-change-size` (default `1000`)
+* Maximum size of changes in bytes added to one batch
+  * `--aws-batch-change-size-bytes` (default `32000`)
+* Maximum value count of changes added to one batch
+  * `aws-batch-change-size-values` (default `1000`)
+
+`aws-batch-change-size` can be very useful for throttling purposes and can be set to any value.
+
+Default values for flags `aws-batch-change-size-bytes` and `aws-batch-change-size-values` are taken from [AWS documentation](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/DNSLimitations.html#limits-api-requests) for Route53 API. **You should not change those values until you really have to.** <br>
+Because those limits are in place, `aws-batch-change-size` can be set to any value: Even if your batch size is `4000` records, your change will be split to separate batches due to bytes/values size limits and apply request will be finished without issues.

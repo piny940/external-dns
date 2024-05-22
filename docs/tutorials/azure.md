@@ -31,6 +31,11 @@ Substitute a domain you own for `example.com` if desired.
 
 If using your own domain that was registered with a third-party domain registrar, you should point your domain's name servers to the values in the `nameServers` field from the JSON data returned by the `az network dns zone create` command. Please consult your registrar's documentation on how to do that.
 
+### Internal Load Balancer
+
+To create internal load balancers, one can set the annotation `service.beta.kubernetes.io/azure-load-balancer-internal` to `true` on the resource.
+**Note**: AKS cluster's control plane managed identity needs to be granted `Network Contributor` role to update the subnet. For more details refer to [Use an internal load balancer with Azure Kubernetes Service (AKS)](https://learn.microsoft.com/en-us/azure/aks/internal-lb)
+
 ## Configuration file
 
 The azure provider will reference a configuration file called `azure.json`.  The preferred way to inject the configuration file is by using a Kubernetes secret. The secret should contain an object named `azure.json` with content similar to this:
@@ -53,6 +58,7 @@ The following fields are used:
 * `aadClientID` and `aadClientSecret` are associated with the Service Principal.  This is only used with Service Principal method documented in the next section.
 * `useManagedIdentityExtension` - this is set to `true` if you use either AKS Kubelet Identity or AAD Pod Identities methods documented in the next section.
 * `userAssignedIdentityID` - this contains the client id from the Managed identitty when using the AAD Pod Identities method documented in the next setion.
+* `activeDirectoryAuthorityHost` - this contains the uri to overwrite the default provided AAD Endpoint. This is useful for providing additional support where the endpoint is not available in the default cloud config from the [azure-sdk-for-go](https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud#pkg-variables).
 * `useWorkloadIdentityExtension` - this is set to `true` if you use Workload Identity method documented in the next section.
 
 The Azure DNS provider expects, by default, that the configuration file is at `/etc/kubernetes/azure.json`.  This can be overridden with the `--azure-config-file` option when starting ExternalDNS.
@@ -386,33 +392,52 @@ $ az identity federated-credential create --name ${IDENTITY_NAME} --identity-nam
 
 NOTE: make sure federated credential refers to correct namespace and service account (`system:serviceaccount:<NAMESPACE>:<SERVICE_ACCOUNT>`)
 
-#### helm
+#### Helm
 
-When deploying external-dns with helm, here are the parameters you need to pass:
+When deploying external-dns with Helm you need to create a secret to store the Azure config (see below) and create a workload identity (out of scope here) before you can install the chart.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-dns-azure
+type: Opaque
+data:
+  azure.json: |
+    {
+      "tenantId": "<TENANT_ID>",
+      "subscriptionId": "<SUBSCRIPTION_ID>",
+      "resourceGroup": "<AZURE_DNS_ZONE_RESOURCE_GROUP>",
+      "useWorkloadIdentityExtension": true
+    }
+```
+
+Once you have created the secret and have a workload identity you can install the chart with the following values.
 
 ```yaml
 fullnameOverride: external-dns
 
 serviceAccount:
+  labels:
+    azure.workload.identity/use: "true"
   annotations:
     azure.workload.identity/client-id: <IDENTITY_CLIENT_ID>
 
 podLabels:
   azure.workload.identity/use: "true"
 
-provider: azure
+extraVolumes:
+  - name: azure-config-file
+    secret:
+      secretName: external-dns-azure
 
-secretConfiguration:
-  enabled: true
-  mountPath: "/etc/kubernetes/"
-  data:
-    azure.json: |
-      {
-        "tenantId": "<TENANT_ID>",
-        "subscriptionId": "<SUBSCRIPTION_ID>",
-        "resourceGroup": "<AZURE_DNS_ZONE_RESOURCE_GROUP>",
-        "useWorkloadIdentityExtension": true
-      }
+extraVolumeMounts:
+  - name: azure-config-file
+    mountPath: /etc/kubernetes
+    readOnly: true
+
+provider:
+  name: azure
 ```
 
 NOTE: make sure the pod is restarted whenever you make a configuration change.
@@ -493,7 +518,7 @@ spec:
     spec:
       containers:
       - name: external-dns
-        image: registry.k8s.io/external-dns/external-dns:v0.14.0
+        image: registry.k8s.io/external-dns/external-dns:v0.14.2
         args:
         - --source=service
         - --source=ingress
@@ -561,7 +586,7 @@ spec:
       serviceAccountName: external-dns
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          image: registry.k8s.io/external-dns/external-dns:v0.14.2
           args:
             - --source=service
             - --source=ingress
@@ -632,7 +657,7 @@ spec:
       serviceAccountName: external-dns
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          image: registry.k8s.io/external-dns/external-dns:v0.14.2
           args:
             - --source=service
             - --source=ingress
@@ -712,7 +737,13 @@ spec:
                   number: 80
 ```
 
-When using ExternalDNS with `ingress` objects it will automatically create DNS records based on host names specified in ingress objects that match the domain-filter argument in the external-dns deployment manifest. When those host names are removed or renamed the corresponding DNS records are also altered.
+When you use ExternalDNS with Ingress resources, it automatically creates DNS records based on the hostnames listed in those Ingress objects.
+Those hostnames must match the filters that you defined (if any):
+
+- By default, `--domain-filter` filters Azure DNS zone.
+- If you use `--domain-filter` together with `--zone-name-filter`, the behavior changes: `--domain-filter` then filters Ingress domains, not the Azure DNS zone name.
+
+When those hostnames are removed or renamed the corresponding DNS records are also altered.
 
 Create the deployment, service and ingress object:
 
@@ -749,10 +780,10 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-annotations:
-  external-dns.alpha.kubernetes.io/hostname: server.example.com
 metadata:
   name: nginx-svc
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: server.example.com
 spec:
   ports:
     - port: 80

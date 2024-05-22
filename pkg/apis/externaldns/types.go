@@ -86,18 +86,22 @@ type Config struct {
 	AWSAssumeRole                      string
 	AWSAssumeRoleExternalID            string
 	AWSBatchChangeSize                 int
+	AWSBatchChangeSizeBytes            int
+	AWSBatchChangeSizeValues           int
 	AWSBatchChangeInterval             time.Duration
 	AWSEvaluateTargetHealth            bool
 	AWSAPIRetries                      int
 	AWSPreferCNAME                     bool
 	AWSZoneCacheDuration               time.Duration
 	AWSSDServiceCleanup                bool
+	AWSZoneMatchParent                 bool
 	AWSDynamoDBRegion                  string
 	AWSDynamoDBTable                   string
 	AzureConfigFile                    string
 	AzureResourceGroup                 string
 	AzureSubscriptionID                string
 	AzureUserAssignedIdentityClientID  string
+	AzureActiveDirectoryAuthorityHost  string
 	BluecatDNSConfiguration            string
 	BluecatConfigFile                  string
 	BluecatDNSView                     string
@@ -189,6 +193,8 @@ type Config struct {
 	RFC2136TAXFR                       bool
 	RFC2136MinTTL                      time.Duration
 	RFC2136BatchChangeSize             int
+	RFC2136UseTLS                      bool
+	RFC2136SkipTLSVerify               bool
 	NS1Endpoint                        string
 	NS1IgnoreSSL                       bool
 	NS1MinTTLSeconds                   int
@@ -257,9 +263,12 @@ var defaultConfig = &Config{
 	AlibabaCloudConfigFile:      "/etc/kubernetes/alibaba-cloud.json",
 	AWSZoneType:                 "",
 	AWSZoneTagFilter:            []string{},
+	AWSZoneMatchParent:          false,
 	AWSAssumeRole:               "",
 	AWSAssumeRoleExternalID:     "",
 	AWSBatchChangeSize:          1000,
+	AWSBatchChangeSizeBytes:     32000,
+	AWSBatchChangeSizeValues:    1000,
 	AWSBatchChangeInterval:      time.Second,
 	AWSEvaluateTargetHealth:     true,
 	AWSAPIRetries:               3,
@@ -347,6 +356,8 @@ var defaultConfig = &Config{
 	RFC2136TAXFR:                true,
 	RFC2136MinTTL:               0,
 	RFC2136BatchChangeSize:      50,
+	RFC2136UseTLS:               false,
+	RFC2136SkipTLSVerify:        false,
 	NS1Endpoint:                 "",
 	NS1IgnoreSSL:                false,
 	TransIPAccountName:          "",
@@ -483,15 +494,18 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("aws-assume-role", "When using the AWS API, assume this IAM role. Useful for hosted zones in another AWS account. Specify the full ARN, e.g. `arn:aws:iam::123455567:role/external-dns` (optional)").Default(defaultConfig.AWSAssumeRole).StringVar(&cfg.AWSAssumeRole)
 	app.Flag("aws-assume-role-external-id", "When using the AWS API and assuming a role then specify this external ID` (optional)").Default(defaultConfig.AWSAssumeRoleExternalID).StringVar(&cfg.AWSAssumeRoleExternalID)
 	app.Flag("aws-batch-change-size", "When using the AWS provider, set the maximum number of changes that will be applied in each batch.").Default(strconv.Itoa(defaultConfig.AWSBatchChangeSize)).IntVar(&cfg.AWSBatchChangeSize)
+	app.Flag("aws-batch-change-size-bytes", "When using the AWS provider, set the maximum byte size that will be applied in each batch.").Default(strconv.Itoa(defaultConfig.AWSBatchChangeSizeBytes)).IntVar(&cfg.AWSBatchChangeSizeBytes)
+	app.Flag("aws-batch-change-size-values", "When using the AWS provider, set the maximum total record values that will be applied in each batch.").Default(strconv.Itoa(defaultConfig.AWSBatchChangeSizeValues)).IntVar(&cfg.AWSBatchChangeSizeValues)
 	app.Flag("aws-batch-change-interval", "When using the AWS provider, set the interval between batch changes.").Default(defaultConfig.AWSBatchChangeInterval.String()).DurationVar(&cfg.AWSBatchChangeInterval)
 	app.Flag("aws-evaluate-target-health", "When using the AWS provider, set whether to evaluate the health of a DNS target (default: enabled, disable with --no-aws-evaluate-target-health)").Default(strconv.FormatBool(defaultConfig.AWSEvaluateTargetHealth)).BoolVar(&cfg.AWSEvaluateTargetHealth)
 	app.Flag("aws-api-retries", "When using the AWS API, set the maximum number of retries before giving up.").Default(strconv.Itoa(defaultConfig.AWSAPIRetries)).IntVar(&cfg.AWSAPIRetries)
 	app.Flag("aws-prefer-cname", "When using the AWS provider, prefer using CNAME instead of ALIAS (default: disabled)").BoolVar(&cfg.AWSPreferCNAME)
 	app.Flag("aws-zones-cache-duration", "When using the AWS provider, set the zones list cache TTL (0s to disable).").Default(defaultConfig.AWSZoneCacheDuration.String()).DurationVar(&cfg.AWSZoneCacheDuration)
+	app.Flag("aws-zone-match-parent", "Expand limit possible target by sub-domains (default: disabled)").BoolVar(&cfg.AWSZoneMatchParent)
 	app.Flag("aws-sd-service-cleanup", "When using the AWS CloudMap provider, delete empty Services without endpoints (default: disabled)").BoolVar(&cfg.AWSSDServiceCleanup)
 	app.Flag("azure-config-file", "When using the Azure provider, specify the Azure configuration file (required when --provider=azure)").Default(defaultConfig.AzureConfigFile).StringVar(&cfg.AzureConfigFile)
-	app.Flag("azure-resource-group", "When using the Azure provider, override the Azure resource group to use (required when --provider=azure-private-dns)").Default(defaultConfig.AzureResourceGroup).StringVar(&cfg.AzureResourceGroup)
-	app.Flag("azure-subscription-id", "When using the Azure provider, specify the Azure configuration file (required when --provider=azure-private-dns)").Default(defaultConfig.AzureSubscriptionID).StringVar(&cfg.AzureSubscriptionID)
+	app.Flag("azure-resource-group", "When using the Azure provider, override the Azure resource group to use (optional)").Default(defaultConfig.AzureResourceGroup).StringVar(&cfg.AzureResourceGroup)
+	app.Flag("azure-subscription-id", "When using the Azure provider, override the Azure subscription to use (optional)").Default(defaultConfig.AzureSubscriptionID).StringVar(&cfg.AzureSubscriptionID)
 	app.Flag("azure-user-assigned-identity-client-id", "When using the Azure provider, override the client id of user assigned identity in config file (optional)").Default("").StringVar(&cfg.AzureUserAssignedIdentityClientID)
 	app.Flag("tencent-cloud-config-file", "When using the Tencent Cloud provider, specify the Tencent Cloud configuration file (required when --provider=tencentcloud)").Default(defaultConfig.TencentCloudConfigFile).StringVar(&cfg.TencentCloudConfigFile)
 	app.Flag("tencent-cloud-zone-type", "When using the Tencent Cloud provider, filter for zones with visibility (optional, options: public, private)").Default(defaultConfig.TencentCloudZoneType).EnumVar(&cfg.TencentCloudZoneType, "", "public", "private")
@@ -581,6 +595,8 @@ func (cfg *Config) ParseFlags(args []string) error {
 	app.Flag("rfc2136-kerberos-password", "When using the RFC2136 provider with GSS-TSIG, specify the password of the user with permissions to update DNS records (required when --rfc2136-gss-tsig=true)").Default(defaultConfig.RFC2136KerberosPassword).StringVar(&cfg.RFC2136KerberosPassword)
 	app.Flag("rfc2136-kerberos-realm", "When using the RFC2136 provider with GSS-TSIG, specify the realm of the user with permissions to update DNS records (required when --rfc2136-gss-tsig=true)").Default(defaultConfig.RFC2136KerberosRealm).StringVar(&cfg.RFC2136KerberosRealm)
 	app.Flag("rfc2136-batch-change-size", "When using the RFC2136 provider, set the maximum number of changes that will be applied in each batch.").Default(strconv.Itoa(defaultConfig.RFC2136BatchChangeSize)).IntVar(&cfg.RFC2136BatchChangeSize)
+	app.Flag("rfc2136-use-tls", "When using the RFC2136 provider, communicate with name server over tls").BoolVar(&cfg.RFC2136UseTLS)
+	app.Flag("rfc2136-skip-tls-verify", "When using TLS with the RFC2136 provider, disable verification of any TLS certificates").BoolVar(&cfg.RFC2136SkipTLSVerify)
 
 	// Flags related to TransIP provider
 	app.Flag("transip-account", "When using the TransIP provider, specify the account name (required when --provider=transip)").Default(defaultConfig.TransIPAccountName).StringVar(&cfg.TransIPAccountName)

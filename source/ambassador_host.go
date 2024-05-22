@@ -142,7 +142,7 @@ func (sc *ambassadorHostSource) Endpoints(ctx context.Context) ([]*endpoint.Endp
 			}
 		}
 
-		hostEndpoints, err := sc.endpointsFromHost(ctx, host, targets)
+		hostEndpoints, err := sc.endpointsFromHost(host, targets)
 		if err != nil {
 			log.Warningf("Could not get endpoints for Host %s", err)
 			continue
@@ -164,15 +164,12 @@ func (sc *ambassadorHostSource) Endpoints(ctx context.Context) ([]*endpoint.Endp
 }
 
 // endpointsFromHost extracts the endpoints from a Host object
-func (sc *ambassadorHostSource) endpointsFromHost(ctx context.Context, host *ambassador.Host, targets endpoint.Targets) ([]*endpoint.Endpoint, error) {
+func (sc *ambassadorHostSource) endpointsFromHost(host *ambassador.Host, targets endpoint.Targets) ([]*endpoint.Endpoint, error) {
 	var endpoints []*endpoint.Endpoint
-
-	providerSpecific := endpoint.ProviderSpecific{}
-	setIdentifier := ""
+	annotations := host.Annotations
 
 	resource := fmt.Sprintf("host/%s/%s", host.Namespace, host.Name)
-
-	annotations := host.Annotations
+	providerSpecific, setIdentifier := getProviderSpecificAnnotations(annotations)
 	ttl := getTTLFromAnnotations(annotations, resource)
 
 	if host.Spec != nil {
@@ -196,7 +193,7 @@ func (sc *ambassadorHostSource) targetsFromAmbassadorLoadBalancer(ctx context.Co
 		return nil, err
 	}
 
-	var targets = extractLoadBalancerTargets(svc, false)
+	targets := extractLoadBalancerTargets(svc, false)
 
 	return targets, nil
 }
