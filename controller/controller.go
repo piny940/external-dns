@@ -248,12 +248,15 @@ func (c *Controller) RunOnce(ctx context.Context) error {
 	plan = plan.Calculate()
 
 	if plan.Changes.HasChanges() {
+		notifier := source.NewSlackNotifier()
 		err = c.Registry.ApplyChanges(ctx, plan.Changes)
 		if err != nil {
 			registryErrorsTotal.Inc()
 			deprecatedRegistryErrors.Inc()
+			notifier.NotifyFail(plan.Changes, err)
 			return err
 		}
+		notifier.NotifyChanges(plan.Changes)
 	} else {
 		controllerNoChangesTotal.Inc()
 		log.Info("All records are already up to date")
