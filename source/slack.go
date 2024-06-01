@@ -6,6 +6,7 @@ import (
 
 	"github.com/slack-go/slack"
 	"sigs.k8s.io/external-dns/plan"
+	"sigs.k8s.io/external-dns/provider"
 )
 
 type slackNotifier struct {
@@ -38,19 +39,29 @@ func (s slackNotifier) NotifyChanges(changes *plan.Changes) error {
 	if len(changes.Create) == 0 && len(changes.Delete) == 0 && len(changes.UpdateNew) == 0 {
 		return nil
 	}
-
 	messages := []string{}
-	for _, change := range changes.Create {
-		messages = append(messages, "Create: "+change.DNSName)
+	for _, endpoint := range changes.Create {
+		for _, target := range endpoint.Targets {
+			messages = append(messages, "Create: "+endpoint.DNSName+" -> "+target)
+		}
 	}
-	for _, change := range changes.Delete {
-		messages = append(messages, "Delete: "+change.DNSName)
+
+	for i, desired := range changes.UpdateNew {
+		current := changes.UpdateOld[i]
+
+		add, remove, _ := provider.Difference(current.Targets, desired.Targets)
+		for _, a := range add {
+			messages = append(messages, "Create: "+current.DNSName+" -> "+a)
+		}
+		for _, a := range remove {
+			messages = append(messages, "Delete: "+current.DNSName+" -> "+a)
+		}
 	}
-	for _, change := range changes.UpdateNew {
-		messages = append(messages, "UpdateNew: "+change.DNSName)
-	}
-	for _, change := range changes.UpdateOld {
-		messages = append(messages, "UpdateOld: "+change.DNSName)
+
+	for _, endpoint := range changes.Delete {
+		for _, target := range endpoint.Targets {
+			messages = append(messages, "Delete: "+endpoint.DNSName+" -> "+target)
+		}
 	}
 	blocks := []slack.Block{
 		slack.NewSectionBlock(
