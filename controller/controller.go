@@ -248,7 +248,7 @@ func (c *Controller) RunOnce(ctx context.Context) error {
 	plan = plan.Calculate()
 
 	if plan.Changes.HasChanges() {
-		notifier := source.NewSlackNotifier()
+		notifier := source.NewSlackNotifier(c.Registry.OwnerID())
 		err = c.Registry.ApplyChanges(ctx, plan.Changes)
 		if err != nil {
 			registryErrorsTotal.Inc()

@@ -10,10 +10,9 @@ import (
 )
 
 type slackNotifier struct {
-	api      ISlackClient
-	channel  string
-	owner    string
-	provider string
+	api     ISlackClient
+	channel string
+	owner   string
 }
 
 type ISlackClient interface {
@@ -28,11 +27,11 @@ func (s slackClient) PostMessage(channel string, options ...slack.MsgOption) (st
 	return s.api.PostMessage(channel, options...)
 }
 
-func NewSlackNotifier() *slackNotifier {
+func NewSlackNotifier(owner string) *slackNotifier {
 	token := os.Getenv("SLACK_TOKEN")
 	channel := os.Getenv("SLACK_CHANNEL")
 	api := slackClient{api: slack.New(token)}
-	return &slackNotifier{api: api, channel: channel}
+	return &slackNotifier{api: api, channel: channel, owner: owner}
 }
 
 func (s slackNotifier) NotifyChanges(changes *plan.Changes) error {
@@ -72,12 +71,6 @@ func (s slackNotifier) NotifyChanges(changes *plan.Changes) error {
 			slack.NewTextBlockObject("mrkdwn", strings.Join(messages, "\n"), false, false),
 			nil, nil,
 		),
-		slack.NewRichTextBlock("Provider",
-			slack.NewRichTextSection(
-				slack.NewRichTextSectionTextElement("Provider", &slack.RichTextSectionTextStyle{Bold: true}),
-				slack.NewRichTextSectionTextElement(": "+s.provider, nil),
-			),
-		),
 		slack.NewRichTextBlock("Owner",
 			slack.NewRichTextSection(
 				slack.NewRichTextSectionTextElement("Owner", &slack.RichTextSectionTextStyle{Bold: true}),
@@ -101,18 +94,29 @@ func (s slackNotifier) NotifyFail(changes *plan.Changes, errInput error) error {
 		return nil
 	}
 
-	messages := []string{errInput.Error()}
-	for _, change := range changes.Create {
-		messages = append(messages, "Create: "+change.DNSName)
+	messages := []string{}
+	for _, endpoint := range changes.Create {
+		for _, target := range endpoint.Targets {
+			messages = append(messages, "Create: "+endpoint.DNSName+" -> "+target)
+		}
 	}
-	for _, change := range changes.Delete {
-		messages = append(messages, "Delete: "+change.DNSName)
+
+	for i, desired := range changes.UpdateNew {
+		current := changes.UpdateOld[i]
+
+		add, remove, _ := provider.Difference(current.Targets, desired.Targets)
+		for _, a := range add {
+			messages = append(messages, "Create: "+current.DNSName+" -> "+a)
+		}
+		for _, a := range remove {
+			messages = append(messages, "Delete: "+current.DNSName+" -> "+a)
+		}
 	}
-	for _, change := range changes.UpdateNew {
-		messages = append(messages, "UpdateNew: "+change.DNSName)
-	}
-	for _, change := range changes.UpdateOld {
-		messages = append(messages, "UpdateOld: "+change.DNSName)
+
+	for _, endpoint := range changes.Delete {
+		for _, target := range endpoint.Targets {
+			messages = append(messages, "Delete: "+endpoint.DNSName+" -> "+target)
+		}
 	}
 	blocks := []slack.Block{
 		slack.NewSectionBlock(
@@ -122,12 +126,6 @@ func (s slackNotifier) NotifyFail(changes *plan.Changes, errInput error) error {
 		slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", strings.Join(messages, "\n"), false, false),
 			nil, nil,
-		),
-		slack.NewRichTextBlock("Provider",
-			slack.NewRichTextSection(
-				slack.NewRichTextSectionTextElement("Provider", &slack.RichTextSectionTextStyle{Bold: true}),
-				slack.NewRichTextSectionTextElement(": "+s.provider, nil),
-			),
 		),
 		slack.NewRichTextBlock("Owner",
 			slack.NewRichTextSection(
