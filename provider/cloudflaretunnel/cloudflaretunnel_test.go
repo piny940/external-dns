@@ -93,17 +93,17 @@ var ExampleTunnelConf = cloudflare.TunnelConfiguration{
 		{
 			Hostname:      "foobar.bar.com",
 			Service:       toHttps("1.2.3.4"),
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("foobar.bar.com"),
 		},
 		{
 			Hostname:      "fooo.bar.com",
 			Service:       toHttps("3.4.5.6"),
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("fooo.bar.com"),
 		},
 		{
 			Hostname:      "bar.foo.com",
 			Service:       "https://2.3.4.5:443",
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("bar.foo.com"),
 		},
 		catchAll,
 	},
@@ -419,7 +419,7 @@ func TestCloudflareA(t *testing.T) {
 			{
 				Hostname:      "bar.com",
 				Service:       toHttps("127.0.0.1"),
-				OriginRequest: defaultOriginRequest,
+				OriginRequest: newOriginRequest("bar.com"),
 			},
 			catchAll,
 		})
@@ -493,7 +493,7 @@ func TestNoCloudflareCustomTTL(t *testing.T) {
 			{
 				Hostname:      "ttl.bar.com",
 				Service:       toHttps("127.0.0.1"),
-				OriginRequest: defaultOriginRequest,
+				OriginRequest: newOriginRequest("ttl.bar.com"),
 			},
 			catchAll,
 		},
@@ -1353,17 +1353,17 @@ func TestCloudflareComplexUpdate(t *testing.T) {
 		{
 			Hostname:      "bar.foo.com",
 			Service:       "https://2.3.4.5:443",
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("bar.foo.com"),
 		},
 		{
 			Hostname:      "foo.bar.com",
 			Service:       toHttps("1.2.3.4"),
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("foo.bar.com"),
 		},
 		{
 			Hostname:      "foobar.bar.com",
 			Service:       "https://2.3.4.5:443",
-			OriginRequest: defaultOriginRequest,
+			OriginRequest: newOriginRequest("foobar.bar.com"),
 		},
 		catchAll,
 	})

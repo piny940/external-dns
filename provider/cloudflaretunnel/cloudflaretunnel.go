@@ -51,11 +51,6 @@ var proxyEnabled *bool = boolPtr(true)
 // proxyDisabled is a pointer to a bool false showing the record should not be proxied through cloudflare
 var proxyDisabled *bool = boolPtr(false)
 
-var defaultOriginRequest = &cloudflare.OriginRequestConfig{
-	Http2Origin: boolPtr(true),
-	NoTLSVerify: boolPtr(true),
-}
-
 var recordTypeProxyNotSupported = map[string]bool{
 	"LOC": true,
 	"MX":  true,
@@ -604,7 +599,14 @@ func newIngress(change cloudFlareChange) cloudflare.UnvalidatedIngressRule {
 		Hostname:      change.ResourceRecord.Name,
 		Path:          "",
 		Service:       toHttps(change.ResourceRecord.Content),
-		OriginRequest: defaultOriginRequest,
+		OriginRequest: newOriginRequest(change.ResourceRecord.Name),
+	}
+}
+
+func newOriginRequest(hostname string) *cloudflare.OriginRequestConfig {
+	return &cloudflare.OriginRequestConfig{
+		OriginServerName: &hostname,
+		Http2Origin:      boolPtr(true),
 	}
 }
 
